@@ -60,4 +60,18 @@ def test_full_pipeline_runs_to_live():
     assert report.decision != "FAIL", report.findings
     BudgetPlan.model_validate(final["budget_plan"])
     assert final["live"] is True
-    assert all(o.status == "ACTIVE" for o in LaunchResult.model_validate(final["launch"]).objects)
+    result = LaunchResult.model_validate(final["launch"])
+    assert all(o.status == "ACTIVE" for o in result.objects if o.kind in ("campaign", "adset", "ad"))
+
+    # live loop: simulated week -> monitor -> optimizer -> feedback to Malav; approvals apply cleanly
+    from shlok import live
+    out = live.cycle(final, source="simulated", days=7)
+    assert out["stats"] and out["actions"]
+    kinds = {a["kind"] for a in out["actions"]}
+    assert kinds & {"pause_ad", "scale_adset", "cut_adset", "refresh_creatives"}
+    state = {**final, **out["update"]}
+    for a in out["actions"]:
+        if a["risk"] == "approval":
+            state |= live.apply_action(state, a["id"], approve=True)
+    plan = BudgetPlan.model_validate(state["budget_plan"])
+    assert (sum(plan.adset_daily.values()) + plan.testing_reserve) * plan.days <= 150000 + 1

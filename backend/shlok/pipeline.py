@@ -10,11 +10,11 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from core import bus, llm
-from core.schemas import (BudgetPlan, ClientBrief, CreativePackage, FixPrompt, LaunchResult, MetaObject,
+from core.schemas import (BudgetPlan, ClientBrief, CreativePackage, FixPrompt, LaunchResult, ResearchReport,
                           TargetingSpec)
 from core.state import RuneState, Step
 
-from . import budget
+from . import budget, launch, targeting
 
 
 class _Weights(BaseModel):
@@ -46,21 +46,18 @@ def budget_step(state: RuneState) -> dict:
 
 
 def targeting_step(state: RuneState) -> dict:
-    """STUB until shlok.targeting lands: broad geo targeting per ad set."""
     brief = ClientBrief.model_validate(state["brief"])
+    research = ResearchReport.model_validate(state["research"]) if state.get("research") else None
     pkg = CreativePackage.model_validate(state["package"])
-    specs = [TargetingSpec(adset_ref=s.ref, spec={"geo_locations": {"countries": brief.geo}},
-                           summary=f"Broad, {', '.join(brief.geo)}") for s in pkg.blueprint.adsets()]
+    specs = targeting.plan_targeting(brief, research, pkg, (state.get("notes") or {}).get("targeting"))
     return {"targeting": [t.model_dump(mode="json") for t in specs]}
 
 
 def launch_step(state: RuneState) -> dict:
-    """STUB until shlok.meta lands: dry-run objects, all PAUSED."""
-    pkg = CreativePackage.model_validate(state["package"])
-    objs = [MetaObject(local_ref=f"campaign:{c.ref}", kind="campaign", meta_id=f"dry_{c.ref}") for c in pkg.blueprint.campaigns]
-    objs += [MetaObject(local_ref=f"adset:{s.ref}", kind="adset", meta_id=f"dry_{s.ref}") for s in pkg.blueprint.adsets()]
-    objs += [MetaObject(local_ref=f"ad:{c.creative_id}", kind="ad", meta_id=f"dry_{c.creative_id}") for c in pkg.creatives]
-    return {"launch": LaunchResult(dry_run=True, objects=objs).model_dump(mode="json")}
+    result = launch.build(
+        ClientBrief.model_validate(state["brief"]), CreativePackage.model_validate(state["package"]),
+        BudgetPlan.model_validate(state["budget_plan"]), [TargetingSpec.model_validate(t) for t in state["targeting"]])
+    return {"launch": result.model_dump(mode="json")}
 
 
 STEPS = [
@@ -83,9 +80,6 @@ def apply_fixes(state: RuneState, prompts: list[FixPrompt]) -> dict:
 
 
 def activate(state: RuneState) -> dict:
-    launch = LaunchResult.model_validate(state["launch"])
-    for o in launch.objects:
-        if o.kind in ("campaign", "adset", "ad"):
-            o.status = "ACTIVE"
-    bus.say(state["client_id"], "shlok.launch", "human", "INFORM", {"text": "Ads are live", "dry_run": launch.dry_run})
-    return {"launch": launch.model_dump(mode="json"), "live": True}
+    result = launch.set_status(state["client_id"], LaunchResult.model_validate(state["launch"]), "ACTIVE")
+    bus.say(state["client_id"], "shlok.launch", "human", "INFORM", {"text": "Ads are live", "dry_run": result.dry_run})
+    return {"launch": result.model_dump(mode="json"), "live": True}
