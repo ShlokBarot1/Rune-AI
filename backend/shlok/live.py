@@ -20,7 +20,7 @@ from core.schemas import (BudgetPlan, ClientBrief, CreativeFeedback, CreativePac
                           TargetingSpec, new_id, now)
 from core.state import RuneState
 
-from . import launch, meta, report, simulator
+from . import launch, meta, optimizer_agent, report, simulator
 
 MAX_SCALE_STEP = 0.20        # never raise an ad set more than 20% at once (keeps Meta learning intact)
 SCALE_COOLDOWN = timedelta(hours=48)
@@ -212,6 +212,46 @@ def build_feedback(brief: ClientBrief, pkg: CreativePackage, adset_ref: str, sta
         direction="Iterate on the winning hook with fresh opening visuals; drop the losing angles.")
 
 
+# ---------- executing actions (shared by the optimizer agent and the rule fallback) ----------
+
+def execute(state: RuneState, brief: ClientBrief, plan: BudgetPlan, result: LaunchResult, stats: dict[str, dict],
+            a: Action, update: dict, direction: str = "") -> list[Action]:
+    """Apply an 'auto' action now (pause, ask for creatives); 'approval' actions are only recorded.
+    `update` collects state changes (new package / launch). Returns the actions to report."""
+    cid = state["client_id"]
+    out = [a]
+    if a.risk == "auto" and a.kind == "pause_ad":
+        ads = [o for o in result.objects if o.local_ref == f"ad:{a.ref}"]
+        launch.set_status(cid, LaunchResult(dry_run=result.dry_run, objects=ads), "PAUSED")
+        a.status = "applied"
+    elif a.kind == "refresh_creatives":
+        pkg = CreativePackage.model_validate(update.get("package") or state["package"])
+        fb = build_feedback(brief, pkg, a.ref, stats)
+        if direction:
+            fb.direction = direction
+        bus.say(cid, "shlok.feedback", "malav.hooks", "REQUEST", fb.model_dump())
+        new = malav.handle_feedback(state, fb)
+        a.status = "applied"
+        if new.creatives:
+            merged = pkg.model_copy(update={"creatives": pkg.creatives + new.creatives})
+            tmp = {**state, "package": merged.model_dump(mode="json")}
+            built = launch.build(brief, merged, plan, [TargetingSpec.model_validate(t) for t in state["targeting"]])
+            tmp["launch"] = built.model_dump(mode="json")
+            blockers = [f for f in deterministic_checks(tmp) if f.severity == "blocker"]
+            if blockers:
+                bus.say(cid, "auditor", "malav", "FIX_PROMPT", {"findings": [b.model_dump() for b in blockers]})
+            else:
+                update |= {"package": tmp["package"], "launch": tmp["launch"]}
+                pending = Action(kind="launch_creatives", ref=a.ref, risk="approval",
+                                 reason=f"{len(new.creatives)} new creatives passed audit; approve to go live.",
+                                 change={"creative_ids": [c.creative_id for c in new.creatives]})
+                save_action(cid, pending)
+                out.append(pending)
+    save_action(cid, a)
+    bus.say(cid, "shlok.optimizer", "human" if a.risk == "approval" else "theater", "INFORM", a.model_dump(mode="json"))
+    return out
+
+
 # ---------- the loop ----------
 
 def cycle(state: RuneState, source: Literal["simulated", "meta"] = "simulated", day: int = 0, days: int = 7) -> dict:
@@ -230,35 +270,12 @@ def cycle(state: RuneState, source: Literal["simulated", "meta"] = "simulated", 
     alerts = monitor(brief, stats)
     for al in alerts:
         bus.say(cid, "shlok.monitor", "shlok.optimizer", "INFORM", al.model_dump())
-    actions = optimize(cid, brief, plan, stats, alerts)
-
     update: dict = {}
-    for a in actions:
-        if a.risk == "auto" and a.kind == "pause_ad":
-            ads = [o for o in result.objects if o.local_ref == f"ad:{a.ref}"]
-            launch.set_status(cid, LaunchResult(dry_run=result.dry_run, objects=ads), "PAUSED")
-            a.status = "applied"
-        elif a.kind == "refresh_creatives":
-            fb = build_feedback(brief, pkg, a.ref, stats)
-            bus.say(cid, "shlok.feedback", "malav.hooks", "REQUEST", fb.model_dump())
-            new = malav.handle_feedback(state, fb)
-            a.status = "applied"
-            if new.creatives:
-                merged = pkg.model_copy(update={"creatives": pkg.creatives + new.creatives})
-                tmp = {**state, "package": merged.model_dump(mode="json")}
-                built = launch.build(brief, merged, plan, [TargetingSpec.model_validate(t) for t in state["targeting"]])
-                tmp["launch"] = built.model_dump(mode="json")
-                blockers = [f for f in deterministic_checks(tmp) if f.severity == "blocker"]
-                if blockers:
-                    bus.say(cid, "auditor", "malav", "FIX_PROMPT", {"findings": [b.model_dump() for b in blockers]})
-                else:
-                    update |= {"package": tmp["package"], "launch": tmp["launch"]}
-                    pending = Action(kind="launch_creatives", ref=a.ref, risk="approval",
-                                     reason=f"{len(new.creatives)} new creatives passed audit; approve to go live.",
-                                     change={"creative_ids": [c.creative_id for c in new.creatives]})
-                    actions.append(pending)
-        save_action(cid, a)
-        bus.say(cid, "shlok.optimizer", "human" if a.risk == "approval" else "theater", "INFORM", a.model_dump(mode="json"))
+    actions = optimizer_agent.run(state, brief, plan, result, stats, alerts, load_insights(cid), update)
+    if actions is None:  # no model reachable: the rule-based optimizer acts instead
+        actions = []
+        for a in optimize(cid, brief, plan, stats, alerts):
+            actions += execute(state, brief, plan, result, stats, a, update)
     if update.get("launch") is None:
         update["launch"] = result.model_dump(mode="json")
     acts = [a.model_dump(mode="json") for a in actions]
