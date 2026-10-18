@@ -12,13 +12,8 @@ from __future__ import annotations
 from core import bus
 from core.schemas import CreativeFeedback, CreativePackage, FixPrompt
 from core.state import RuneState, Step
-from malav import intake, research, strategy
+from malav import hooks, intake, research, strategy
 from malav.common import fixture as _fixture
-
-
-def hooks(state: RuneState) -> dict:
-    bus.log(state["client_id"], "malav.hooks", "STUB: loaded fixture hooks")
-    return {"hooks": _fixture("hooks")}
 
 
 def creatives(state: RuneState) -> dict:
@@ -30,7 +25,7 @@ STEPS = [
     Step("intake", intake.graph, ("brief", "context_doc")),  # a subgraph: one node per question
     Step("research", research.research_step, ("research", "context_doc")),
     Step("strategy", strategy.strategy_step, ("blueprint",)),
-    Step("hooks", hooks, ("hooks",)),
+    Step("hooks", hooks.hooks_step, ("hooks",)),
     Step("creatives", creatives, ("package",)),
 ]
 
