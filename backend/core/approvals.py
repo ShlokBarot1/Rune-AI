@@ -57,7 +57,7 @@ def evaluate_suggestion(state: RuneState, step: str, comment: str, artifact: dic
     user = (f"Step: {step}\nClient brief: {json.dumps(state.get('brief', {}), default=str)[:6000]}\n"
             f"Current output: {json.dumps(artifact, default=str)[:8000]}\nHuman request: {comment}")
     try:
-        return llm.structured("reason", EVALUATOR_SYSTEM, user, Verdict)
+        return llm.structured("reason", EVALUATOR_SYSTEM, user, Verdict, agent="core.suggestions")
     except Exception as e:  # LLM down must never block the human
         bus.log(state["client_id"], "core.suggestions", f"evaluator unavailable ({e.__class__.__name__}); applying as-is")
         return Verdict(valid=True, reply="Applying your change.", instruction=comment)
