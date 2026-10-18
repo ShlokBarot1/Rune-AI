@@ -5,6 +5,7 @@ variants of a winner), so every path gets the same layering, QA and packaging ru
 """
 from __future__ import annotations
 
+import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
@@ -125,6 +126,8 @@ class Studio:
     def _product(self) -> Optional[str]:
         imgs = [i for p in self.brief.products for i in p.images]
         if not imgs:
+            bus.log(self.cid, GEN, "No product photo in the brief: ads will have no product layer "
+                                   "(add one at the intake gate, e.g. 'use https://…/product.jpg')")
             return None
         try:
             path = media.product_cutout(imgs[0], self.dir / "product_cutout.png")
@@ -136,8 +139,14 @@ class Studio:
 
     def scene_prompt(self, hook: HookPlus, job: Job) -> str:
         b = self.brief
-        # never name the product: the model would draw its own version of it
+        # never name the product: diffusion models ignore "no X" and draw their own version of it,
+        # so the product's words are stripped from the (LLM-written) scene description
         scene = hook.scene or "empty wooden tabletop in a softly lit modern home, shallow depth of field, props at the edges"
+        words = {w for p in b.products for w in re.findall(r"[a-z]{3,}", p.name.lower())} - {"the", "and", "with", "for"}
+        if words:
+            scene = re.sub(rf"\b(a |an |the )?(glass|cup|bottle|jar|pack|bag|can)? ?(of )?({'|'.join(map(re.escape, words))})s?\b",
+                           "", scene, flags=re.I)
+            scene = re.sub(r"\s{2,}|\s+(?=[,.])", " ", scene).strip(" ,.")
         p = f"{scene}. Mood: {b.brand.tone or 'premium'}. Colour accents {', '.join(b.brand.colors[:2])}"
         return f"{p}. Avoid: {job.note}" if job.note else p
 

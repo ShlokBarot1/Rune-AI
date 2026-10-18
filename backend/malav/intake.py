@@ -350,6 +350,15 @@ def prefill(s: IntakeState) -> dict:
         bus.log(cid, AGENT, f"Draft extraction failed ({e.__class__.__name__}); I'll ask for everything")
     if not draft.brand.colors and colors:
         draft.brand.colors = colors[:3]
+    for p in draft.products[:3]:  # the creatives composite the REAL product photo, so make sure we have one
+        if not p.images and p.url and p.url.rstrip("/") != url.rstrip("/"):  # a homepage og:image is usually the logo
+            try:
+                img = web.og_image(p.url)
+                if img:
+                    p.images = [img]
+                    bus.log(cid, AGENT, f"Product photo for {p.name}: {img[:90]}")
+            except Exception:
+                pass
 
     pending = missing(draft)
     bus.log(cid, AGENT, f"Need to ask about: {', '.join(pending)}" if pending else "Every slot prefilled with confidence")

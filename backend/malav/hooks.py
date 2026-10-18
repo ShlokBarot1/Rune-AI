@@ -105,13 +105,28 @@ def _cut(text: str, n: int) -> str:
     return text if len(text) <= n else text[:n + 1].rsplit(" ", 1)[0].rstrip(",;:-—") or text[:n]
 
 
+def _cut_sentence(text: str, n: int) -> str:
+    """Trim to <= n chars at a sentence end; a word boundary + "…" if no sentence ends late enough."""
+    if len(text) <= n:
+        return text
+    head = text[:n]
+    end = max(head.rfind("."), head.rfind("!"), head.rfind("?"))
+    return head[:end + 1] if end >= n * 0.4 else _cut(text, n - 1) + "…"
+
+
+def _opens_with(primary: str, hook: str) -> bool:
+    """Does the copy already carry the hook up front (allowing light rewording)?"""
+    hw = set(re.findall(r"\w+", hook.lower()))
+    return not hw or len(hw & set(re.findall(r"\w+", primary[:160].lower()))) / len(hw) >= 0.6
+
+
 def fit_copy(c: AdCopy, hook: str, brief: ClientBrief) -> AdCopy:
     """Meta limits enforced in code: headline <= 40, description <= 30, hook in the first 125 chars,
-    primary text <= 250 (the auditor flags > 300)."""
+    primary text <= 250 (the auditor flags > 300), never cut mid-sentence."""
     primary = " ".join(c.primary_text.split())
-    if hook.lower()[:40] not in primary[:125].lower():
+    if not _opens_with(primary[:125], hook):
         primary = f"{hook} {primary}".strip()
-    return AdCopy(primary_text=_cut(primary, 250), headline=_cut(c.headline, 40), description=_cut(c.description, 30),
+    return AdCopy(primary_text=_cut_sentence(primary, 250), headline=_cut(c.headline, 40), description=_cut(c.description, 30),
                   cta=c.cta or GOAL_CTA[brief.goal])
 
 
