@@ -12,7 +12,6 @@ website scrape or earlier questions. Only `brief` and `context_doc` leave the su
 from __future__ import annotations
 
 import json
-import os
 import re
 from datetime import date, timedelta
 from typing import Optional, TypedDict
@@ -26,6 +25,7 @@ from core.approvals import ask_human
 from core.schemas import (BrandKit, BudgetInput, ClientBrief, Deliverables, Goal, KPITargets, Product,
                           Ratio, SpecialAdCategory)
 from malav import web
+from malav.common import demo_mode, fixture as fixture_json
 
 AGENT = "malav.intake"
 CONFIDENT = 0.8
@@ -136,11 +136,6 @@ class IntakeState(IntakeIn, total=False):
 
 
 # ---------- helpers ----------
-
-def _offline(s: IntakeState) -> bool:
-    i = s.get("intake") or {}
-    return os.getenv("RUNE_OFFLINE") == "1" or not (i.get("website") or i.get("url") or i.get("notes"))
-
 
 def _website(s: IntakeState) -> str:
     i = s.get("intake") or {}
@@ -319,8 +314,7 @@ def context_doc(cid: str, b: ClientBrief, source: str = "", answers: Optional[li
 # ---------- nodes ----------
 
 def fixture(s: IntakeState) -> dict:
-    from malav.pipeline import _fixture
-    brief = _fixture("brief")
+    brief = fixture_json("brief")
     bus.log(s["client_id"], AGENT, "No website or notes given (or RUNE_OFFLINE=1): using the demo brief")
     b = ClientBrief.model_validate(brief)
     return {"brief": brief, "context_doc": _render_context(b, ContextInsights(), [], 1, "Demo brief (offline).")}
@@ -433,7 +427,7 @@ def revise(s: IntakeState) -> dict:
 def _route_start(s: IntakeState) -> str:
     if (s.get("notes") or {}).get("intake") and s.get("brief"):
         return "revise"
-    return "fixture" if _offline(s) else "prefill"
+    return "fixture" if demo_mode(s) else "prefill"
 
 
 def _route_next(s: IntakeState) -> str:

@@ -1,6 +1,7 @@
-"""Web reading helpers shared by Malav's agents (Jina Reader + raw HTML colour sniffing)."""
+"""Web helpers shared by Malav's agents: Jina Reader, search (Tavily/Jina), Meta Ad Library, colour sniffing."""
 from __future__ import annotations
 
+import json
 import os
 import re
 from collections import Counter
@@ -21,6 +22,36 @@ def read_page(url: str, max_chars: int = 15_000) -> str:
     r = httpx.get(f"https://r.jina.ai/{url}", headers=headers, timeout=60, follow_redirects=True)
     r.raise_for_status()
     return r.text[:max_chars]
+
+
+def search(query: str, n: int = 5) -> list[dict]:
+    """[{url, title, content}] from Tavily, falling back to Jina Search. [] when neither key is set."""
+    if os.getenv("TAVILY_API_KEY"):
+        key = os.getenv("TAVILY_API_KEY")
+        r = httpx.post("https://api.tavily.com/search", timeout=30, headers={"Authorization": f"Bearer {key}"},
+                       json={"api_key": key, "query": query, "max_results": n, "search_depth": "basic"})
+        r.raise_for_status()
+        return [{"url": x["url"], "title": x.get("title", ""), "content": x.get("content", "")}
+                for x in r.json().get("results", [])]
+    if os.getenv("JINA_API_KEY"):
+        r = httpx.get("https://s.jina.ai/", params={"q": query}, timeout=60, headers={
+            "Authorization": f"Bearer {os.getenv('JINA_API_KEY')}", "Accept": "application/json",
+            "X-Respond-With": "no-content"})
+        r.raise_for_status()
+        return [{"url": x["url"], "title": x.get("title", ""), "content": x.get("description") or x.get("content", "")}
+                for x in (r.json().get("data") or [])[:n]]
+    return []
+
+
+def ad_library(terms: str, countries: list[str], limit: int = 8) -> list[dict]:
+    """Meta Ad Library (ads_archive). Commercial ads are only returned for EU delivery, hence EU countries."""
+    v = os.getenv("META_API_VERSION", "v23.0")
+    r = httpx.get(f"https://graph.facebook.com/{v}/ads_archive", timeout=30, params={
+        "access_token": os.getenv("META_ACCESS_TOKEN"), "search_terms": terms, "ad_type": "ALL",
+        "ad_reached_countries": json.dumps(countries), "limit": limit,
+        "fields": "page_name,ad_creative_bodies,ad_creative_link_titles,ad_delivery_start_time"})
+    r.raise_for_status()
+    return r.json().get("data", [])
 
 
 def _norm(h: str) -> str:
