@@ -36,7 +36,8 @@ def daily_report(brief: ClientBrief, plan: BudgetPlan, stats: dict[str, dict], a
         text = llm.chat("fast", skills.with_skills(
             "Write a short daily ad performance report for a busy client: 3 short sections "
             "(How it's going, What we changed, Next). Use only the given numbers and keep every "
-            "better/worse judgement exactly as stated in the facts.", ["analytics"]), facts, agent="shlok.report")
+            "better/worse judgement exactly as stated in the facts. Plain text only: no markdown symbols "
+            "(#, *, ---); put each section title on its own line.", ["analytics"]), facts, agent="shlok.report")
     except Exception as e:  # report still useful without the LLM
         bus.log(brief.client_id, "shlok.report", f"LLM unavailable ({e.__class__.__name__}); plain report")
         text = facts
