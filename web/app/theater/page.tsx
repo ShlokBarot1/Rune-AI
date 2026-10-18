@@ -98,8 +98,17 @@ function Line({ m }: { m: BusMsg }) {
           <span className="meta ml-auto">{new Date(m.created_at).toLocaleTimeString()}</span>
         </div>
         <button onClick={() => setOpen(!open)} className="mt-0.5 block w-full text-left text-[13px] leading-relaxed" style={{ color: "var(--text-2)" }}>
+          {m.payload?.step ? <span className="meta mr-1.5">step {m.payload.step}</span> : null}
           {msgText(m)}
         </button>
+        {m.payload?.tool && (
+          <div className="mt-1.5 flex flex-wrap items-start gap-1.5 text-[12px]">
+            <span className="pill blue">{m.payload.tool}</span>
+            <span className={m.payload.observation?.startsWith("REJECTED") ? "pill bad" : "meta"} style={{ whiteSpace: "normal" }}>
+              {String(m.payload.observation ?? "").slice(0, 160)}
+            </span>
+          </div>
+        )}
         {open && <pre className="tile mt-2 max-h-60 overflow-auto text-[11px]">{JSON.stringify(m.payload, null, 2)}</pre>}
       </div>
     </div>

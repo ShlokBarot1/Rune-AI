@@ -80,8 +80,9 @@ def chat(system: str, user: str, images: Optional[list[str]] = None) -> str:
     except json.JSONDecodeError:
         raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {(proc.stderr or proc.stdout)[:200]}")
     usage = out.get("usage") or {}
-    _record(usage.get("input_tokens", 0) + usage.get("cache_read_input_tokens", 0)
-            + usage.get("cache_creation_input_tokens", 0), usage.get("output_tokens", 0))
+    # cached prompt reads cost ~10% of fresh input, so they count at 10% toward the daily cap
+    _record(usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0)
+            + usage.get("cache_read_input_tokens", 0) // 10, usage.get("output_tokens", 0))
     if out.get("is_error"):
         raise RuntimeError(f"claude: {out.get('result') or out.get('subtype')}")
     return out.get("result", "")
