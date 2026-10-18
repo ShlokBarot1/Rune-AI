@@ -1,6 +1,24 @@
 "use client";
 import { useEffect, useState } from "react";
-import { usePoll, type Json } from "@/lib/api";
+import { post, usePoll, type Json } from "@/lib/api";
+
+/** Save a human edit of Malav-owned state (brief / hooks / package) while the run waits at a gate. */
+export const editState = (cid: string, key: "brief" | "hooks" | "package", value: Json) =>
+  post(`/malav/runs/${cid}/edit`, { key, value });
+
+/** Upload an image (logo / product photo); resolves to its media path for the brief. */
+export async function uploadImage(cid: string, file: File): Promise<string> {
+  const data = await new Promise<string>((ok, bad) => {
+    const r = new FileReader();
+    r.onload = () => ok(String(r.result));
+    r.onerror = bad;
+    r.readAsDataURL(file);
+  });
+  return (await post(`/malav/runs/${cid}/upload`, { filename: file.name, data })).path;
+}
+
+/** Send a change request to the waiting gate (the suggestion evaluator + owning agent apply it). */
+export const requestChanges = (cid: string, comment: string) => post(`/runs/${cid}/resume`, { action: "changes", comment });
 
 /** Every stage of the orchestrated pipeline, in order, with the state key that proves it finished. */
 export const STAGES = [

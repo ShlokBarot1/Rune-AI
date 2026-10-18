@@ -118,6 +118,10 @@ def product_cutout(src: str, out: Path) -> Optional[str]:
     try:
         from rembg import remove
         out.write_bytes(remove(raw))
+        with Image.open(out) as cut:  # crop the transparent padding, or the product renders tiny
+            box = cut.getchannel("A").getbbox()
+            if box:
+                cut.crop(box).save(out)
     except Exception:
         out.write_bytes(raw)
     return str(out)
@@ -138,6 +142,25 @@ def layout(ratio: str, w: int, h: int) -> dict:
                 PROD_BOTTOM=4 * u, PROD_H=(0.46 if ratio == "4:5" else 0.5) * h, PROD_CLASS="right", BODY_CLASS="")
 
 
+def _lum(hex_: str) -> float:
+    r, g, b = (int(hex_.lstrip("#")[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    f = lambda c: c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+
+
+def contrast(a: str, b: str) -> float:
+    la, lb = sorted((_lum(a), _lum(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def brand_pair(colors: list[str]) -> tuple[str, str]:
+    """(c1, c2): c2 is the CTA button fill, c1 its text. Guarantees readable contrast (WCAG >= 4.5)."""
+    valid = [c for c in colors if re.fullmatch(r"#[0-9a-fA-F]{6}", c or "")]
+    c1 = valid[0] if valid else "#1F2D4D"
+    c2 = next((c for c in valid[1:] if contrast(c1, c) >= 4.5), None)
+    return c1, c2 or ("#FFFFFF" if _lum(c1) < 0.4 else "#111318")
+
+
 def cta_label(cta: str) -> str:
     return cta.replace("_", " ").capitalize()
 
@@ -146,7 +169,7 @@ def fill_template(template_id: str, ratio: str, w: int, h: int, *, bg: str, prod
                   sub: str, cta: str, colors: list[str], font: str, logo: Optional[str], brand_name: str,
                   caption: str = "", show_cta: bool = True) -> str:
     g = layout(ratio, w, h)
-    c1, c2 = (colors + ["#1F2D4D", "#E8D9C4"])[:2] if colors else ("#1F2D4D", "#E8D9C4")
+    c1, c2 = brand_pair(colors)
     logo_html = (f'<img class="logo" src="{Path(resolve(logo)).as_uri() if not logo.startswith("http") else logo}">'
                  if logo else f'<div class="brand">{html.escape(brand_name)}</div>')
     vals = {**{k: (f"{v:.0f}" if isinstance(v, float) else v) for k, v in g.items()},

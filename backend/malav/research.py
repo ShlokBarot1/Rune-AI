@@ -110,7 +110,11 @@ def _generic(b: ClientBrief) -> str:
     name = re.sub(r"\(.*?\)", "", b.products[0].name)
     for w in b.business_name.split():
         name = re.sub(rf"\b{re.escape(w)}\b", "", name, flags=re.I)
-    return " ".join(name.split()).lower() or b.industry
+    name = " ".join(name.split()).lower()
+    # "First Collection", "Summer Drop", "Starter Set" name a release, not a product: search the industry instead
+    vague = re.fullmatch(r"(the |our |new |first |latest |summer |winter |spring |fall |starter |signature )*"
+                         r"(collection|drop|set|bundle|kit|range|line|edition|release)s?( \d+)?", name)
+    return b.industry.lower() if (not name or vague) else name
 
 
 def _slug(text: str) -> str:
@@ -157,7 +161,8 @@ def competitors(ctx: Ctx) -> dict:
     agent, b = "malav.research.competitors", ctx.brief
     bus.log(ctx.cid, agent, "Finding competitors (skills: competitor-profiling)")
     results = _search_all(ctx, agent, [f"best {_generic(b)} brands {' '.join(b.geo)}",
-                                       f"{b.business_name} competitors alternatives"])
+                                       f"best {b.industry} brands {' '.join(b.geo)}",
+                                       f"brands like {b.business_name} {b.industry}"])
     names = llm.structured("fast", COMPETITOR_LIST_SYSTEM,
                            ctx.ask(f"Client: {b.business_name} ({b.website})\n\nSources:\n{_sources(results, 5000)}"),
                            _CompetitorNames).competitors[:4]

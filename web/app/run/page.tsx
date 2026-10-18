@@ -8,6 +8,8 @@ import { PipelineRail, Theater } from "@/components/rune/Pipeline";
 import { AuditSummary, BriefCard, HooksView, ResearchView, StrategyView } from "@/components/rune/Views";
 import { CreativesBoard } from "@/components/rune/CreativesBoard";
 import ApprovalDock from "@/components/rune/ApprovalDock";
+import BriefEditor from "@/components/rune/BriefEditor";
+import { BudgetView, MetaBuildView, TargetingView } from "@/components/rune/Launch";
 
 function Stat({ label, value, sub, dark = false, href }: { label: string; value: React.ReactNode; sub?: string; dark?: boolean; href?: string }) {
   return (
@@ -22,26 +24,10 @@ function Stat({ label, value, sub, dark = false, href }: { label: string; value:
   );
 }
 
-function ShlokStage({ id, v }: { id: StageId; v: Json }) {
-  const bp = v.budget_plan, cur = v.brief?.budget?.currency ?? "INR";
-  if (id === "budget" && bp) return (
-    <section className="card fade-in">
-      <div className="label">Budget plan · {bp.mode} · {bp.bid_strategy}</div>
-      <div className="hero-num mt-1">{money(Object.values(bp.adset_daily as Record<string, number>).reduce((a, b) => a + b, 0), cur)}<span className="label"> /day</span></div>
-      <div className="mt-3 flex flex-col">{Object.entries(bp.adset_daily as Record<string, number>).map(([k, d]) => <div key={k} className="row text-[13px]"><span className="flex-1">{k}</span><b>{money(d, cur)}</b></div>)}</div>
-      <p className="meta mt-2">{bp.rationale}</p>
-    </section>
-  );
-  if (id === "targeting" && v.targeting) return (
-    <div className="grid gap-3 md:grid-cols-2 fade-in">{v.targeting.map((t: Json) => <section key={t.adset_ref} className="card"><div className="title">{t.adset_ref}</div><p className="mt-1 text-[13px]" style={{ color: "var(--text-2)" }}>{t.summary}</p></section>)}</div>
-  );
-  if (id === "launch" && v.launch) return (
-    <section className="card fade-in">
-      <div className="label">Meta build {v.launch.dry_run ? "· dry run" : "· sandbox"}</div>
-      <div className="hero-num mt-1">{v.launch.objects?.length ?? 0}<span className="label"> objects</span></div>
-      <div className="mt-3 flex flex-wrap gap-1.5">{["campaign", "adset", "ad", "image", "video"].map((k) => <span key={k} className="pill">{v.launch.objects.filter((o: Json) => o.kind === k).length} {k}s</span>)}</div>
-    </section>
-  );
+function ShlokStage({ id, v, cid, gate, reload }: { id: StageId; v: Json; cid: string | null; gate?: string; reload: () => void }) {
+  if (id === "budget") return <BudgetView v={v} />;
+  if (id === "targeting") return <TargetingView v={v} cid={cid} gateOpen={gate === "targeting"} onSent={reload} />;
+  if (id === "launch") return <MetaBuildView v={v} />;
   if ((id === "audit" || id === "go_live") && v.audit) return <AuditSummary a={v.audit} round={v.audit_round} />;
   return <div className="tile py-10 text-center text-[13px]" style={{ color: "var(--text-2)" }}>This stage hasn&apos;t run yet.</div>;
 }
@@ -94,6 +80,7 @@ function CreativesProgress({ msgs }: { msgs: Json[] }) {
 export default function MissionControl() {
   const { runs, clientId, setClientId, snap, reload } = useRun();
   const [picked, setPicked] = useState<StageId | null>(null);
+  const [editing, setEditing] = useState(false);
   const msgs = useEvents(clientId, 400);
   const v = snap?.values ?? {};
   const states = stageStates(snap);
@@ -149,12 +136,16 @@ export default function MissionControl() {
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="flex min-w-0 flex-col gap-4">
           {pending && clientId && <ApprovalDock key={pending.interrupt_id} item={pending} clientId={clientId} onDone={reload} />}
-          {stage === "intake" && <BriefCard b={v.brief ?? null} />}
+          {stage === "intake" && (editing && v.brief && clientId
+            ? <BriefEditor cid={clientId} brief={v.brief} onCancel={() => setEditing(false)} onSaved={() => { setEditing(false); reload(); }} />
+            : <BriefCard b={v.brief ?? null} onEdit={pending?.gate === "intake" ? () => setEditing(true) : undefined} />)}
           {stage === "research" && <ResearchView r={v.research ?? null} />}
           {stage === "strategy" && <StrategyView bp={v.blueprint ?? null} negotiation={negotiation} />}
           {stage === "hooks" && <HooksView hooks={v.hooks ?? null} bp={v.blueprint ?? null} brand={v.brief?.business_name ?? "Brand"} />}
-          {stage === "creatives" && (pkg ? <CreativesBoard pkg={pkg} compact /> : <CreativesProgress msgs={msgs} />)}
-          {["budget", "targeting", "launch", "audit", "go_live"].includes(stage) && <ShlokStage id={stage} v={v} />}
+          {stage === "creatives" && (pkg
+            ? <CreativesBoard pkg={pkg} compact hooks={v.hooks ?? []} cid={clientId} editable={pending?.gate === "creatives"} onChanged={reload} />
+            : <CreativesProgress msgs={msgs} />)}
+          {["budget", "targeting", "launch", "audit", "go_live"].includes(stage) && <ShlokStage id={stage} v={v} cid={clientId} gate={pending?.gate} reload={reload} />}
           {stage === "creatives" && pkg && <Link href="/studio" className="btn btn-ghost self-start"><Images size={15} /> Open Creative Studio</Link>}
           {stage === "audit" && v.audit && <Link href="/audit" className="btn btn-ghost self-start"><ShieldCheck size={15} /> Full audit report</Link>}
         </div>

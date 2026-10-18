@@ -24,6 +24,7 @@ from sse_starlette.sse import EventSourceResponse
 from core import bus
 from core.schemas import new_id, now
 from graph import build
+from malav import api as malav_api
 from shlok import api as shlok_api
 
 app = FastAPI(title="Rune AI")
@@ -151,3 +152,5 @@ async def events(client_id: Optional[str] = None, after: int = 0):
 shlok_api.bind(graph)
 shlok_api.start_scheduler(run_ids)
 app.include_router(shlok_api.router)
+malav_api.bind(graph)
+app.include_router(malav_api.router)
