@@ -1,0 +1,80 @@
+"use client";
+import { useEffect, useState } from "react";
+import { usePoll, type Json } from "@/lib/api";
+
+/** Every stage of the orchestrated pipeline, in order, with the state key that proves it finished. */
+export const STAGES = [
+  { id: "intake", label: "Intake", owner: "malav", done: "brief" },
+  { id: "research", label: "Research", owner: "malav", done: "research" },
+  { id: "strategy", label: "Strategy", owner: "malav", done: "blueprint" },
+  { id: "hooks", label: "Hooks", owner: "malav", done: "hooks" },
+  { id: "creatives", label: "Creatives", owner: "malav", done: "package" },
+  { id: "budget", label: "Budget", owner: "shlok", done: "budget_plan" },
+  { id: "targeting", label: "Targeting", owner: "shlok", done: "targeting" },
+  { id: "launch", label: "Meta build", owner: "shlok", done: "launch" },
+  { id: "audit", label: "Audit", owner: "auditor", done: "audit" },
+  { id: "go_live", label: "Go live", owner: "human", done: "live" },
+] as const;
+export type StageId = (typeof STAGES)[number]["id"];
+export type StageState = "todo" | "running" | "waiting" | "done";
+
+/** Which node the graph is on, normalised to a stage id ("hooks__gate" -> hooks, "fix" -> audit). */
+function stageOf(node: string | undefined): StageId | null {
+  if (!node) return null;
+  const n = node.replace(/__gate$/, "");
+  if (n === "fix") return "audit";
+  if (n === "activate") return "go_live";
+  return (STAGES.find((s) => s.id === n)?.id as StageId) ?? null;
+}
+
+export function stageStates(snap: Json | null): Record<StageId, StageState> {
+  const v = snap?.values ?? {};
+  const out = {} as Record<StageId, StageState>;
+  const current = stageOf(snap?.next?.[0]);
+  const waiting = (snap?.pending?.length ?? 0) > 0;
+  for (const s of STAGES) out[s.id] = v[s.done] != null && v[s.done] !== false ? "done" : "todo";
+  if (current) {
+    const gateOnly = snap?.next?.[0]?.endsWith("__gate");
+    out[current] = waiting ? "waiting" : gateOnly ? "done" : "running";
+    if (waiting && current) out[current] = "waiting";
+  }
+  if (v.live) out.go_live = "done";
+  return out;
+}
+
+export function currentStage(snap: Json | null): StageId {
+  return stageOf(snap?.next?.[0]) ?? (snap?.values?.live ? "go_live" : snap?.values?.audit ? "audit" : "intake");
+}
+
+/** The run being viewed: ?client=… else the newest run. Polls the snapshot. */
+export function useRun(ms = 2500) {
+  const [runs] = usePoll<Json[]>("/runs", 5000);
+  const [cid, setCid] = useState<string | null>(null);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get("client");
+    if (q) setCid(q);
+  }, []);
+  const id = cid ?? runs?.[0]?.client_id ?? null;
+  const [snap, err, reload] = usePoll<Json>(id ? `/runs/${id}` : null, ms);
+  return { runs, clientId: id, setClientId: setCid, snap, err, reload };
+}
+
+export const AGENT_COLORS: Record<string, [string, string]> = {
+  malav: ["#d4f34a", "#1a2200"],
+  shlok: ["#9fb7ff", "#0d1a3d"],
+  auditor: ["#ffcf7a", "#3a2400"],
+  human: ["#ffffff", "#111318"],
+  core: ["#3a4150", "#e9edf3"],
+};
+export function agentColor(sender: string): [string, string] {
+  return AGENT_COLORS[sender.split(".")[0]] ?? AGENT_COLORS.core;
+}
+export function agentShort(sender: string): string {
+  const parts = sender.split(".");
+  const last = parts[parts.length - 1];
+  return last.slice(0, 2).toUpperCase();
+}
+export function agentName(sender: string): string {
+  const parts = sender.split(".");
+  return parts.length > 1 ? parts.slice(1).join(" · ") : sender;
+}

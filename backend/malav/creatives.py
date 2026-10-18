@@ -310,6 +310,19 @@ def creatives_step(state: RuneState) -> dict:
     bp = CampaignBlueprint.model_validate(state["blueprint"])
     hooks = {h["id"]: HookPlus.model_validate(h) for h in state.get("hooks", [])}
     note = (state.get("notes") or {}).get("creatives", "")
+    if note and state.get("package"):  # Creative Studio "regenerate this asset": only the named creatives
+        old = CreativePackage.model_validate(state["package"])
+        named = {c.creative_id for c in old.creatives if c.creative_id in note}
+        if named:
+            bus.log(cid, PLANNER, f"Regenerating {len(named)} asset(s) you asked for: {note[:160]}")
+            jobs = [Job(campaign_ref=c.campaign_ref, adset_ref=c.adset_ref, ad_ref=c.ad_ref, hook_id=c.hook_id,
+                        kind=c.kind, ratio=c.ratio, template_id=c.template_id or "product-hero",
+                        creative_id=c.creative_id, version=c.version + 1, note=note)
+                    for c in old.creatives if c.creative_id in named]
+            fresh = {c.creative_id: c for c in produce(cid, brief, jobs, hooks)}
+            pkg = old.model_copy(update={"creatives": [fresh.get(c.creative_id, c) for c in old.creatives]})
+            write_manifest(cid, pkg)
+            return {"package": pkg.model_dump(mode="json")}
     jobs = plan_jobs(bp, hooks)
     if note:
         jobs = [j.model_copy(update={"note": note}) for j in jobs]
