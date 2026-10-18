@@ -13,6 +13,15 @@ cd backend
 ../.venv/Scripts/python -m pytest -q                    # must pass before every push
 ```
 
+Run the app (two terminals):
+
+```bash
+cd backend && ../.venv/Scripts/python -m uvicorn api:app --port 8000   # API + agents
+cd web && npm install && npm run dev                                  # dashboard on http://localhost:3000
+```
+
+With `META_DRY_RUN=1` nothing is sent to Meta. On a live client, Live Performance → "Simulate next 7 days" feeds the optimizer simulated data.
+
 FreeLLMAPI runs separately (Docker): see https://github.com/tashfeenahmed/freellmapi. Put its unified key in `backend/.env`.
 
 ## Layout

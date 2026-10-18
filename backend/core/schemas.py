@@ -252,6 +252,8 @@ class BudgetPlan(BaseModel):
     campaign_daily: dict[str, float]   # campaign_ref -> daily budget (major units)
     adset_daily: dict[str, float]      # adset_ref -> daily budget (major units)
     rationale: str = ""
+    target_cpa: Optional[float] = None  # agreed with the human at the budget step (falls back to brief)
+    net_total: Optional[float] = None   # ad spend after taxes/fees, if the client's total included them
 
 
 class TargetingSpec(BaseModel):

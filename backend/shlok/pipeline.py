@@ -10,11 +10,12 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from core import bus, llm
-from core.schemas import (BudgetPlan, ClientBrief, CreativePackage, FixPrompt, LaunchResult, MetaObject,
+from core.approvals import ask_human
+from core.schemas import (BudgetPlan, ClientBrief, CreativePackage, FixPrompt, LaunchResult, ResearchReport,
                           TargetingSpec)
 from core.state import RuneState, Step
 
-from . import budget
+from . import budget, launch, targeting
 
 
 class _Weights(BaseModel):
@@ -35,32 +36,59 @@ def _weights_from_note(state: RuneState, note: str) -> dict[str, float] | None:
         return None
 
 
+FEE_WORDS = ("gst", "tax", "fee", "agency", "commission", "inclusive")
+
+
 def budget_step(state: RuneState) -> dict:
+    """S1 budget intake (clarify with the human) + S2 allocation."""
     brief = ClientBrief.model_validate(state["brief"])
     pkg = CreativePackage.model_validate(state["package"])
+    cid, b = brief.client_id, brief.budget
     note = (state.get("notes") or {}).get("budget")
+    prev = state.get("budget_plan") or {}
+    net_total = prev.get("net_total")
+    target_cpa = prev.get("target_cpa") or brief.kpi_targets.target_cpa
+
+    if not note:  # first pass: clear up what the proposal leaves ambiguous (questions must come first in the node)
+        if any(w in b.notes.lower() for w in FEE_WORDS):
+            a = ask_human(cid, "shlok.budget",
+                          f"The proposal mentions taxes/fees (\"{b.notes[:120]}\"). Is {b.total:,.0f} {b.currency} pure ad spend?",
+                          ["Yes, all of it is ad spend", "No, it includes 18% GST"])
+            net_total = round(b.total / 1.18, 2) if "18%" in a else None
+        price = brief.products[0].price if brief.products else None
+        if not target_cpa and brief.goal in ("sales", "leads") and price:
+            est = round(price * 0.35)
+            a = ask_human(cid, "shlok.budget",
+                          f"No target CPA was given. Use {est:,} {b.currency} (≈35% of the {price:,.0f} product price)?",
+                          [f"Use {est}", "No CPA target"])
+            target_cpa = est if a.startswith("Use") else None
+
+    effective = brief.model_copy(update={
+        "budget": b.model_copy(update={"total": net_total or b.total}),
+        "kpi_targets": brief.kpi_targets.model_copy(update={"target_cpa": target_cpa}),
+    })
     weights = _weights_from_note(state, note) if note else None
-    plan = budget.allocate(brief, pkg.blueprint, weights)
-    bus.log(brief.client_id, "shlok.budget", plan.rationale, adset_daily=plan.adset_daily)
+    plan = budget.allocate(effective, pkg.blueprint, weights)
+    plan.total, plan.target_cpa, plan.net_total = b.total, target_cpa, net_total
+    if net_total:
+        plan.rationale = f"Ad spend {net_total:,.0f} after 18% GST. " + plan.rationale
+    bus.log(cid, "shlok.budget", plan.rationale, adset_daily=plan.adset_daily)
     return {"budget_plan": plan.model_dump(mode="json")}
 
 
 def targeting_step(state: RuneState) -> dict:
-    """STUB until shlok.targeting lands: broad geo targeting per ad set."""
     brief = ClientBrief.model_validate(state["brief"])
+    research = ResearchReport.model_validate(state["research"]) if state.get("research") else None
     pkg = CreativePackage.model_validate(state["package"])
-    specs = [TargetingSpec(adset_ref=s.ref, spec={"geo_locations": {"countries": brief.geo}},
-                           summary=f"Broad, {', '.join(brief.geo)}") for s in pkg.blueprint.adsets()]
+    specs = targeting.plan_targeting(brief, research, pkg, (state.get("notes") or {}).get("targeting"))
     return {"targeting": [t.model_dump(mode="json") for t in specs]}
 
 
 def launch_step(state: RuneState) -> dict:
-    """STUB until shlok.meta lands: dry-run objects, all PAUSED."""
-    pkg = CreativePackage.model_validate(state["package"])
-    objs = [MetaObject(local_ref=f"campaign:{c.ref}", kind="campaign", meta_id=f"dry_{c.ref}") for c in pkg.blueprint.campaigns]
-    objs += [MetaObject(local_ref=f"adset:{s.ref}", kind="adset", meta_id=f"dry_{s.ref}") for s in pkg.blueprint.adsets()]
-    objs += [MetaObject(local_ref=f"ad:{c.creative_id}", kind="ad", meta_id=f"dry_{c.creative_id}") for c in pkg.creatives]
-    return {"launch": LaunchResult(dry_run=True, objects=objs).model_dump(mode="json")}
+    result = launch.build(
+        ClientBrief.model_validate(state["brief"]), CreativePackage.model_validate(state["package"]),
+        BudgetPlan.model_validate(state["budget_plan"]), [TargetingSpec.model_validate(t) for t in state["targeting"]])
+    return {"launch": result.model_dump(mode="json")}
 
 
 STEPS = [
@@ -83,9 +111,6 @@ def apply_fixes(state: RuneState, prompts: list[FixPrompt]) -> dict:
 
 
 def activate(state: RuneState) -> dict:
-    launch = LaunchResult.model_validate(state["launch"])
-    for o in launch.objects:
-        if o.kind in ("campaign", "adset", "ad"):
-            o.status = "ACTIVE"
-    bus.say(state["client_id"], "shlok.launch", "human", "INFORM", {"text": "Ads are live", "dry_run": launch.dry_run})
-    return {"launch": launch.model_dump(mode="json"), "live": True}
+    result = launch.set_status(state["client_id"], LaunchResult.model_validate(state["launch"]), "ACTIVE")
+    bus.say(state["client_id"], "shlok.launch", "human", "INFORM", {"text": "Ads are live", "dry_run": result.dry_run})
+    return {"launch": result.model_dump(mode="json"), "live": True}

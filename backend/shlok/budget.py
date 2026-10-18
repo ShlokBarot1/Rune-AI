@@ -12,14 +12,21 @@ from typing import Optional
 from core import bus
 from core.schemas import BudgetPlan, CampaignBlueprint, ClientBrief, FeasibilityResult
 
+from . import meta
+
 TESTING_RESERVE = 0.15            # share of daily budget held for feedback-loop creatives
 LEARNING_EVENTS_PER_WEEK = 50     # Meta learning phase needs ~50 optimisation events / ad set / week
 FUNNEL_WEIGHTS = {"TOF": 0.7, "MOF": 0.2, "BOF": 0.1}
 
 
 def account_min_daily(currency: str) -> float:
-    """Meta's minimum daily budget per ad set (major units).
-    ponytail: env/constant; read /act_<id>?fields=min_daily_budget once Meta is wired (shlok.meta)."""
+    """Meta's minimum daily budget per ad set (major units): from the ad account when connected,
+    else META_MIN_DAILY / a conservative default."""
+    if not meta.dry_run():
+        try:
+            return float(meta.account_facts()["min_daily_budget"]) / 100
+        except (meta.MetaError, KeyError, ValueError):
+            pass
     return float(os.getenv("META_MIN_DAILY", 100 if currency == "INR" else 1))
 
 
