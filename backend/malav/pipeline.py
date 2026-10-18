@@ -10,20 +10,10 @@ tests/test_pipeline.py must keep passing.
 from __future__ import annotations
 
 from core import bus
-from core.schemas import CampaignBlueprint, ClientBrief, CreativeFeedback, CreativePackage, FixPrompt
+from core.schemas import CreativeFeedback, CreativePackage, FixPrompt
 from core.state import RuneState, Step
-from malav import intake, research
+from malav import intake, research, strategy
 from malav.common import fixture as _fixture
-from shlok.budget import budget_feasibility
-
-
-def strategy(state: RuneState) -> dict:
-    """Shows the cross-team contract: ask Shlok's budget agent if the structure is affordable."""
-    brief = ClientBrief.model_validate(state["brief"])
-    blueprint = CampaignBlueprint.model_validate(_fixture("blueprint"))
-    check = budget_feasibility(brief, n_adsets=len(blueprint.adsets()), asked_by="malav.strategy")
-    bus.log(state["client_id"], "malav.strategy", f"STUB: fixture blueprint; feasibility={check.feasible}")
-    return {"blueprint": blueprint.model_dump(mode="json")}
 
 
 def hooks(state: RuneState) -> dict:
@@ -39,7 +29,7 @@ def creatives(state: RuneState) -> dict:
 STEPS = [
     Step("intake", intake.graph, ("brief", "context_doc")),  # a subgraph: one node per question
     Step("research", research.research_step, ("research", "context_doc")),
-    Step("strategy", strategy, ("blueprint",)),
+    Step("strategy", strategy.strategy_step, ("blueprint",)),
     Step("hooks", hooks, ("hooks",)),
     Step("creatives", creatives, ("package",)),
 ]
