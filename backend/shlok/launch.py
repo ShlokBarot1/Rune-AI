@@ -67,7 +67,8 @@ def build(brief: ClientBrief, pkg: CreativePackage, plan: BudgetPlan, targeting:
             result.objects.append(have[local_ref])
             return have[local_ref].meta_id
         result.payloads.append({"local_ref": local_ref, "POST": path, **payload})
-        if dry:
+        # META_DRY_RUN_ADS=1: real campaign/ad sets, simulated creatives/ads (when the app lacks Page ad permission)
+        if dry or (kind in ("creative", "ad") and os.getenv("META_DRY_RUN_ADS") == "1"):
             meta_id = f"dry_{local_ref}"
         else:
             meta_id = upload() if upload else meta.api("POST", path, data=payload)["id"]
@@ -146,7 +147,7 @@ def build(brief: ClientBrief, pkg: CreativePackage, plan: BudgetPlan, targeting:
 def set_status(client_id: str, result: LaunchResult, status: str, kinds=("campaign", "adset", "ad")) -> LaunchResult:
     for o in result.objects:
         if o.kind in kinds:
-            if not result.dry_run:
+            if not result.dry_run and not o.meta_id.startswith("dry_"):
                 meta.api("POST", o.meta_id, data={"status": status})
                 _save(client_id, o.model_copy(update={"status": status}))
             o.status = status
