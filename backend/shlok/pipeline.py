@@ -7,6 +7,8 @@ Contract with the rest of the system:
 """
 from __future__ import annotations
 
+import json
+
 from pydantic import BaseModel
 
 from core import bus, llm
@@ -26,11 +28,14 @@ def _weights_from_note(state: RuneState, note: str) -> dict[str, float] | None:
     """Turn a human budget request ("more on fitness") into ad-set weights; code then does the math."""
     pkg = CreativePackage.model_validate(state["package"])
     adsets = {s.ref: s.name for s in pkg.blueprint.adsets()}
-    current = state.get("budget_plan", {}).get("adset_daily", {})
+    example = {"adset_weights": {ref: 1.0 for ref in adsets}}
     try:
         return llm.structured(
-            "reason", "Convert the request into relative budget weights per ad set (1.0 = current equal share).",
-            f"Ad sets: {adsets}\nCurrent daily budgets: {current}\nRequest: {note}", _Weights).adset_weights
+            "reason",
+            "Turn the client's budget request into relative weights per ad set. Use exactly the given ad set refs as "
+            "keys. 1.0 = an equal share; 2.0 = twice as much as a 1.0 ad set; 0 = no budget. "
+            f"Example of the shape: {json.dumps(example)}",
+            f"Ad sets (ref: name): {adsets}\nRequest: {note}", _Weights, agent="shlok.budget").adset_weights
     except Exception as e:
         bus.log(state["client_id"], "shlok.budget", f"could not parse budget request ({e.__class__.__name__}); keeping equal split")
         return None

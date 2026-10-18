@@ -99,7 +99,9 @@ def llm_review(state: RuneState) -> list[Finding]:
     user = f"Brief:\n{json.dumps(state['brief'], default=str)[:5000]}\n\nAds:\n{json.dumps(copy)[:10000]}"
     try:
         system = skills.with_skills(POLICY_SYSTEM, ["ad-creative", "copy-editing"])
-        return llm.structured("reason", system, user, _LLMFindings).findings
+        found = llm.structured("reason", system, user, _LLMFindings, agent="auditor").findings
+        # the model names its own categories; scores stay on the fixed rubric (this review is about copy + policy)
+        return [f.model_copy(update={"dimension": f.dimension if f.dimension in DIMENSIONS else "copy_policy"}) for f in found]
     except Exception as e:  # free models fail sometimes; deterministic checks still gate go-live
         bus.log(state["client_id"], "auditor", f"LLM review skipped ({e.__class__.__name__})")
         return []

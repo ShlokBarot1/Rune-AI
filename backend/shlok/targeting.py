@@ -5,7 +5,7 @@ exists. A human change request is turned into a small structured patch by the LL
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
@@ -20,7 +20,7 @@ GENDERS = {"male": [1], "female": [2]}
 class TargetingPatch(BaseModel):
     age_min: Optional[int] = None
     age_max: Optional[int] = None
-    genders: Optional[list[str]] = None        # "male" / "female" / "all"
+    genders: Optional[list[Literal["male", "female", "all"]]] = None
     add_interests: list[str] = []
     remove_interests: list[str] = []
     countries: Optional[list[str]] = None
@@ -28,8 +28,9 @@ class TargetingPatch(BaseModel):
 
 def _patch_from_note(client_id: str, note: str, current: dict) -> TargetingPatch:
     try:
-        return llm.structured("fast", "Convert the request into a targeting patch. Leave fields null if unchanged.",
-                              f"Current: {current}\nRequest: {note}", TargetingPatch)
+        return llm.structured("fast", "Convert the request into a targeting patch. Leave every field the request does "
+                                      "not mention null or empty; never invent interests.",
+                              f"Current: {current}\nRequest: {note}", TargetingPatch, agent="shlok.targeting")
     except Exception as e:
         bus.log(client_id, "shlok.targeting", f"could not parse targeting request ({e.__class__.__name__})")
         return TargetingPatch()

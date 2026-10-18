@@ -20,9 +20,14 @@ def daily_report(brief: ClientBrief, plan: BudgetPlan, stats: dict[str, dict], a
     t = totals(stats)
     best = sorted(stats.items(), key=lambda x: (x[1]["cpa"] is None, x[1]["cpa"] or 0))[:3]
     cur = plan.currency
+    target = plan.target_cpa or brief.kpi_targets.target_cpa
+    # verdicts are decided here, not by the model (small models flip comparisons)
+    verdict = ("no target set" if not target or not t["cpa"] else
+               f"BETTER than the {target:,.0f} target (cheaper per conversion — good)" if t["cpa"] <= target else
+               f"WORSE than the {target:,.0f} target (too expensive per conversion)")
     facts = (
-        f"Spend {t['spend']:,.0f} {cur} of {plan.total:,.0f} budget. {t['conversions']} conversions, "
-        f"CPA {t['cpa'] or 0:,.0f} (target {plan.target_cpa or brief.kpi_targets.target_cpa or '-'}), "
+        f"Spend {t['spend']:,.0f} {cur} of {plan.total:,.0f} budget. {t['conversions']} conversions.\n"
+        f"Cost per conversion (CPA) {t['cpa'] or 0:,.0f} {cur}: {verdict}.\n"
         f"ROAS {t['roas']:.2f}, CTR {t['ctr']:.2%}.\n"
         "Best ads: " + "; ".join(f"{r} CPA {s['cpa'] or 0:,.0f}" for r, s in best) + "\n"
         "Actions: " + ("; ".join(f"{a['kind']} {a['ref']} ({a['status']}): {a['reason']}" for a in actions) or "none")
@@ -30,7 +35,9 @@ def daily_report(brief: ClientBrief, plan: BudgetPlan, stats: dict[str, dict], a
     try:
         text = llm.chat("fast", skills.with_skills(
             "Write a short daily ad performance report for a busy client: 3 short sections "
-            "(How it's going, What we changed, Next). Use only the given numbers.", ["analytics"]), facts)
+            "(How it's going, What we changed, Next). Use only the given numbers and keep every "
+            "better/worse judgement exactly as stated in the facts. Plain text only: no markdown symbols "
+            "(#, *, ---); put each section title on its own line.", ["analytics"]), facts, agent="shlok.report")
     except Exception as e:  # report still useful without the LLM
         bus.log(brief.client_id, "shlok.report", f"LLM unavailable ({e.__class__.__name__}); plain report")
         text = facts
