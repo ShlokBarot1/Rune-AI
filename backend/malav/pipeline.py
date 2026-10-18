@@ -15,6 +15,7 @@ from pathlib import Path
 from core import bus
 from core.schemas import CampaignBlueprint, ClientBrief, CreativeFeedback, CreativePackage, FixPrompt
 from core.state import RuneState, Step
+from malav import intake
 from shlok.budget import budget_feasibility
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
@@ -22,12 +23,6 @@ FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 
 def _fixture(name: str):
     return json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
-
-
-def intake(state: RuneState) -> dict:
-    brief = _fixture("brief")
-    bus.log(brief["client_id"], "malav.intake", "STUB: loaded fixture brief")
-    return {"brief": brief, "context_doc": f"# {brief['business_name']}\n{brief['audience_notes']}"}
 
 
 def research(state: RuneState) -> dict:
@@ -55,7 +50,7 @@ def creatives(state: RuneState) -> dict:
 
 
 STEPS = [
-    Step("intake", intake, ("brief",)),
+    Step("intake", intake.graph, ("brief", "context_doc")),  # a subgraph: one node per question
     Step("research", research, ("research",)),
     Step("strategy", strategy, ("blueprint",)),
     Step("hooks", hooks, ("hooks",)),
