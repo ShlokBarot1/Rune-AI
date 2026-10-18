@@ -1,5 +1,6 @@
 "use client";
 import { fileUrl, money, type Json } from "@/lib/api";
+import { ScoreRing } from "@/components/rune/Views";
 
 /** Renders whatever a gate is asking the human to approve. Unknown shapes fall back to JSON. */
 export default function Artifact({ artifact, brief }: { artifact: Json; brief?: Json }) {
@@ -113,13 +114,8 @@ export function AuditView({ v }: { v: Json }) {
   return (
     <div className="flex flex-col gap-3">
       <div><span className={`pill ${tone}`}>{v.decision}</span></div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {Object.entries<number>(v.scores ?? {}).map(([k, s]) => (
-          <div key={k} className="tile">
-            <div className="label capitalize">{k.replace("_", " & ")}</div>
-            <div className="card-num" style={{ color: s >= 85 ? "var(--success)" : s >= 70 ? "var(--warn)" : "var(--danger)" }}>{s}</div>
-          </div>
-        ))}
+      <div className="grid grid-cols-3 gap-4 sm:grid-cols-5 lg:grid-cols-7">
+        {Object.entries<number>(v.scores ?? {}).map(([k, s]) => <ScoreRing key={k} label={k} value={s} size={78} />)}
       </div>
       {v.findings?.map((f: Json, i: number) => (
         <div key={i} className="row">
