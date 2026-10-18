@@ -46,6 +46,51 @@ function ShlokStage({ id, v }: { id: StageId; v: Json }) {
   return <div className="tile py-10 text-center text-[13px]" style={{ color: "var(--text-2)" }}>This stage hasn&apos;t run yet.</div>;
 }
 
+/** While generation runs: planned vs finished assets, each QA verdict as it lands (from the agent bus). */
+function CreativesProgress({ msgs }: { msgs: Json[] }) {
+  const logs = msgs.filter((m) => m.type === "LOG");
+  const plan = [...logs].reverse().find((m) => m.sender === "malav.planner" && String(m.payload?.text).startsWith("Plan:"));
+  const total = Number(String(plan?.payload?.text ?? "").match(/Plan: (\d+) assets/)?.[1] ?? 0);
+  const since = plan ? plan.seq : 0;
+  const results = logs.filter((m) => m.seq > since && m.sender === "malav.qa" && /: (pass|NEEDS HUMAN)/.test(m.payload?.text ?? ""));
+  const steps = logs.filter((m) => m.seq > since && m.sender === "malav.generator");
+  const step = steps[steps.length - 1]?.payload?.text;
+  const done = results.length;
+  return (
+    <section className="card fade-in">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="label">Generating creatives</div>
+          <div className="hero-num mt-1">{done}<span className="text-[22px] opacity-40"> / {total || "…"}</span></div>
+        </div>
+        <span className="pill lime live-pulse">● {step ?? "planning the jobs…"}</span>
+      </div>
+      <div className="mt-4 h-2 rounded-full" style={{ background: "var(--bar)" }}>
+        <div className="h-2 rounded-full transition-all duration-700" style={{ width: `${total ? (done / total) * 100 : 4}%`, background: "var(--ink)" }} />
+      </div>
+      <div className="mt-4 grid gap-2 md:grid-cols-2">
+        {["Background scene", "Real product cut-out", "Text & CTA template", "Vision QA"].map((s, i) => (
+          <div key={s} className="tile flex items-center gap-2 !py-2.5 text-[12.5px]">
+            <span className="agent-dot !h-6 !w-6" style={{ background: i < 3 || done ? "var(--accent)" : "var(--bar)", color: "var(--accent-ink)" }}>{i + 1}</span>{s}
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 flex flex-col">
+        {results.slice(-8).reverse().map((m) => {
+          const t = String(m.payload.text), ok = t.includes(": pass");
+          return (
+            <div key={m.seq} className="row fade-in !py-2">
+              <span className={`pill ${ok ? "ok" : "bad"} shrink-0`}>{ok ? "QA pass" : "needs human"}</span>
+              <span className="truncate text-[12.5px]">{t.split(":")[0]}</span>
+              <span className="meta ml-auto shrink-0">{t.match(/score (\d+)/)?.[0]}</span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 export default function MissionControl() {
   const { runs, clientId, setClientId, snap, reload } = useRun();
   const [picked, setPicked] = useState<StageId | null>(null);
@@ -108,7 +153,7 @@ export default function MissionControl() {
           {stage === "research" && <ResearchView r={v.research ?? null} />}
           {stage === "strategy" && <StrategyView bp={v.blueprint ?? null} negotiation={negotiation} />}
           {stage === "hooks" && <HooksView hooks={v.hooks ?? null} bp={v.blueprint ?? null} brand={v.brief?.business_name ?? "Brand"} />}
-          {stage === "creatives" && (pkg ? <CreativesBoard pkg={pkg} compact /> : <div className="tile py-10 text-center text-[13px]" style={{ color: "var(--text-2)" }}>Backgrounds, product cut-outs and templates are being composed…</div>)}
+          {stage === "creatives" && (pkg ? <CreativesBoard pkg={pkg} compact /> : <CreativesProgress msgs={msgs} />)}
           {["budget", "targeting", "launch", "audit", "go_live"].includes(stage) && <ShlokStage id={stage} v={v} />}
           {stage === "creatives" && pkg && <Link href="/studio" className="btn btn-ghost self-start"><Images size={15} /> Open Creative Studio</Link>}
           {stage === "audit" && v.audit && <Link href="/audit" className="btn btn-ghost self-start"><ShieldCheck size={15} /> Full audit report</Link>}
