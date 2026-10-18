@@ -85,22 +85,19 @@ function Thought({ b, end, live, collapsed }: { b: Extract<Block, { kind: "thoug
 const between = (m: BusMsg) =>
   (m.type === "REQUEST" || m.type === "RESPONSE") && !["human", "theater"].includes(m.recipient) && m.sender !== "human";
 
+/** Agents are "working" while the bus has moved in the last 20 s. */
+export const isWorking = (msgs: BusMsg[]) => {
+  const last = msgs[msgs.length - 1];
+  return !!last && Date.now() - new Date(last.created_at).getTime() < 20000;
+};
+
 /** The dark live panel: every agent step, with agent-to-agent conversations shown as chat bubbles. */
 export function Theater({ clientId, height = 640, compact = false }: { clientId: string | null; height?: number | string; compact?: boolean }) {
   const msgs = useEvents(clientId, 400);
   const box = useRef<HTMLDivElement>(null);  // scroll only the feed, never the page
   useEffect(() => { box.current?.scrollTo({ top: box.current.scrollHeight, behavior: "smooth" }); }, [msgs.length]);
   const shown = msgs.filter((m) => m.type !== "LOG" || !String(m.payload?.text ?? "").startsWith("Searched:") || !compact);
-  const last = shown[shown.length - 1];
-  const working = last && Date.now() - new Date(last.created_at).getTime() < 20000;
-  // consecutive steps of one agent = one "thought"; conversations, questions and your decisions stand alone
-  const blocks: Block[] = [];
-  for (const m of shown) {
-    const step = m.sender !== "human" && !between(m) && m.type !== "QUESTION" && (m.type === "LOG" || m.recipient === "theater");
-    const prev = blocks[blocks.length - 1];
-    if (step && prev?.kind === "thought" && prev.sender === m.sender) prev.msgs.push(m);
-    else blocks.push(step ? { kind: "thought", sender: m.sender, msgs: [m] } : { kind: "msg", m });
-  }
+  const working = isWorking(shown);
 
   return (
     <section className="panel-dark flex flex-col" style={{ height }}>
@@ -113,11 +110,30 @@ export function Theater({ clientId, height = 640, compact = false }: { clientId:
       </div>
       <div ref={box} className="scroll-thin -mr-2 flex-1 overflow-y-auto pr-2">
         {shown.length === 0 && <p className="meta py-8 text-center">Waiting for the first agent…</p>}
+        <Feed msgs={shown} working={working} />
+      </div>
+    </section>
+  );
+}
+
+/** Steps grouped into "thoughts" per agent; conversations, questions and your decisions stand alone. */
+export function Feed({ msgs: shown, working, keepOpen = 6 }: { msgs: BusMsg[]; working: boolean; keepOpen?: number }) {
+  // consecutive steps of one agent = one "thought"; conversations, questions and your decisions stand alone
+  const blocks: Block[] = [];
+  for (const m of shown) {
+    const step = m.sender !== "human" && !between(m) && m.type !== "QUESTION" && (m.type === "LOG" || m.recipient === "theater");
+    const prev = blocks[blocks.length - 1];
+    if (step && prev?.kind === "thought" && prev.sender === m.sender) prev.msgs.push(m);
+    else blocks.push(step ? { kind: "thought", sender: m.sender, msgs: [m] } : { kind: "msg", m });
+  }
+
+  return (
+    <>
         {blocks.map((b, i) => {
           if (b.kind === "thought") {
             const next = blocks[i + 1];
             const end = next ? (next.kind === "thought" ? next.msgs[0] : next.m).created_at : new Date().toISOString();
-            return <Thought key={b.msgs[0].seq} b={b} end={end} live={!next && !!working} collapsed={i < blocks.length - 6} />;
+            return <Thought key={b.msgs[0].seq} b={b} end={end} live={!next && !!working} collapsed={i < blocks.length - keepOpen} />;
           }
           const m = b.m;
           if (m.sender === "human") {  // your decisions: quiet one-liners
@@ -148,7 +164,6 @@ export function Theater({ clientId, height = 640, compact = false }: { clientId:
           }
           return null;
         })}
-      </div>
-    </section>
+    </>
   );
 }

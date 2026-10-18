@@ -197,6 +197,10 @@ html, body {
   background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent !important;
   animation: shimmer 1.6s linear infinite;
 }
+.wire { height: 2px; min-width: 14px; flex: 1; border-radius: 2px; background: var(--night-3); }
+.wire.lit { background: var(--night-text-2); }
+.wire.running { background: repeating-linear-gradient(90deg, var(--accent) 0 6px, transparent 6px 12px); background-size: 24px 2px; animation: wire .8s linear infinite; }
+@keyframes wire { from { background-position: 0 0; } to { background-position: 24px 0; } }
 @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 .typing span { display: inline-block; width: 5px; height: 5px; margin: 0 1.5px; border-radius: 999px;
   background: currentColor; opacity: .4; animation: blink 1.2s infinite; }
