@@ -48,6 +48,7 @@ class Draft(BaseModel):
     goal: Optional[Goal] = None
     currency: Optional[str] = None
     budget_total: Optional[float] = None
+    budget_notes: str = ""              # client's own budget wording (Shlok checks it for GST/fees)
     start: Optional[date] = None
     end: Optional[date] = None
     geo: list[str] = []
@@ -367,6 +368,8 @@ def ask(s: IntakeState) -> dict:
     q, options, default = question(slot, d)
     answer = ask_human(cid, AGENT, q, options)
     patch = parse_answer(cid, slot, q, answer, options, default)
+    if slot == "budget" and answer:
+        patch["budget_notes"] = answer
     d = Draft.model_validate({**d.model_dump(), **patch, "confidence": {**d.confidence, slot: 1.0}})
     bus.log(cid, AGENT, f"{slot}: {answer or options[0]}", patch=json.loads(json.dumps(patch, default=str)))
     return {"draft": d.model_dump(mode="json"), "pending": s["pending"][1:],
@@ -387,7 +390,7 @@ def finalize(s: IntakeState) -> dict:
         kpi_targets=KPITargets(target_cpa=d.target_cpa, target_roas=d.target_roas),
         geo=d.geo or ["IN"], languages=d.languages or ["en"], audience_notes=d.audience_notes, brand=d.brand,
         budget=BudgetInput(total=d.budget_total or 30000, currency=(d.currency or "INR").upper(),
-                           start=d.start or start, end=d.end or end),
+                           start=d.start or start, end=d.end or end, notes=d.budget_notes),
         deliverables=Deliverables(n_images=2 if d.n_images is None else d.n_images,
                                   n_videos=2 if d.n_videos is None else d.n_videos,
                                   ratios=d.ratios or ["4:5", "9:16"]),
