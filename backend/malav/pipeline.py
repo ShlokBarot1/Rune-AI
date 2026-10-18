@@ -9,25 +9,12 @@ tests/test_pipeline.py must keep passing.
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 from core import bus
 from core.schemas import CampaignBlueprint, ClientBrief, CreativeFeedback, CreativePackage, FixPrompt
 from core.state import RuneState, Step
-from malav import intake
+from malav import intake, research
+from malav.common import fixture as _fixture
 from shlok.budget import budget_feasibility
-
-FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
-
-
-def _fixture(name: str):
-    return json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
-
-
-def research(state: RuneState) -> dict:
-    bus.log(state["client_id"], "malav.research", "STUB: loaded fixture research")
-    return {"research": _fixture("research")}
 
 
 def strategy(state: RuneState) -> dict:
@@ -51,7 +38,7 @@ def creatives(state: RuneState) -> dict:
 
 STEPS = [
     Step("intake", intake.graph, ("brief", "context_doc")),  # a subgraph: one node per question
-    Step("research", research, ("research",)),
+    Step("research", research.research_step, ("research", "context_doc")),
     Step("strategy", strategy, ("blueprint",)),
     Step("hooks", hooks, ("hooks",)),
     Step("creatives", creatives, ("package",)),
