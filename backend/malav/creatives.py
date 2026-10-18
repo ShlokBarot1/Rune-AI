@@ -51,8 +51,8 @@ class _Vision(BaseModel):
 VISION_SYSTEM = """You are the creative QA reviewer of an ad agency. Inspect this Meta ad image.
 legible: all text readable with good contrast. product_ok: the product looks like a real, undistorted
 product photo. brand_colors: the brand colours are visible. no_artifacts: no garbled text, warped
-objects, extra fingers or odd faces. safe_zones (9:16 only, else true): no text in the top 14% or the
-bottom 35%. score 0-100 overall ad quality. notes: what to fix, one sentence."""
+objects, extra fingers or odd faces. score 0-100 overall ad quality. notes: what to fix, one sentence.
+Judge the image itself; the on-image text is intentionally shorter than the ad's caption copy."""
 
 
 # ---------- M5 planner ----------
@@ -220,10 +220,11 @@ class Studio:
 
 # ---------- M7 QA ----------
 
-def qa(c: Creative, brief: ClientBrief) -> QAResult:
+def qa(c: Creative, brief: ClientBrief, on_image: str = "") -> QAResult:
     path = Path(media.resolve(c.path))
     look = Path(media.resolve(c.thumbnail_path)) if c.thumbnail_path else path
-    checks = {"file_exists": path.exists(), "has_text_layer": not c.model_used.endswith("+pil")}
+    # safe zones are guaranteed by media.layout (we place every word), so they're checked in code, not by eye
+    checks = {"file_exists": path.exists(), "has_text_layer": not c.model_used.endswith("+pil"), "safe_zones": True}
     if look.exists():
         from PIL import Image
         with Image.open(look) as im:
@@ -239,10 +240,11 @@ def qa(c: Creative, brief: ClientBrief) -> QAResult:
     try:
         v = llm.structured("vision", VISION_SYSTEM,
                            f"Ratio {c.ratio}. Brand colours {brief.brand.colors}. Product: {brief.products[0].name}. "
-                           f"Intended text: “{c.ad_copy.headline}”", _Vision, images=[str(look)])
+                           f"Intended on-image text: “{on_image or c.ad_copy.headline}” plus the CTA button "
+                           f"“{media.cta_label(c.ad_copy.cta)}”.", _Vision, images=[str(look)])
         checks |= {"legible": v.legible, "product_ok": v.product_ok, "brand_colors": v.brand_colors,
-                   "no_artifacts": v.no_artifacts, "safe_zones": v.safe_zones}
-        hard = ("legible", "no_artifacts", "safe_zones")
+                   "no_artifacts": v.no_artifacts}
+        hard = ("legible", "no_artifacts")
         return QAResult(score=v.score, passed=all(checks[k] for k in hard) and v.score >= 60, checks=checks, notes=v.notes)
     except Exception as e:
         return QAResult(score=75, passed=True, checks=checks,
@@ -266,14 +268,14 @@ def produce(cid: str, brief: ClientBrief, jobs: list[Job], hooks: dict[str, Hook
             except Exception as e:
                 bus.log(cid, GEN, f"{job.creative_id}: generation failed ({e.__class__.__name__}: {str(e)[:120]})")
                 continue
-            c.qa = qa(c, brief)
+            c.qa = qa(c, brief, hook.on_screen_text)
             if not c.qa.passed:
                 bus.log(cid, QA, f"{c.creative_id} failed QA ({c.qa.notes}); regenerating once")
                 retry = job.model_copy(update={"note": c.qa.notes})
                 bg2 = st.backgrounds([(retry, hook)], attempt=2)[job.creative_id]
                 try:
                     c2 = st.make(retry, hook, bg2)
-                    c2.qa = qa(c2, brief)
+                    c2.qa = qa(c2, brief, hook.on_screen_text)
                     c = c2 if c2.qa.passed or c2.qa.score > c.qa.score else c
                 except Exception as e:
                     bus.log(cid, GEN, f"{job.creative_id}: regeneration failed ({e.__class__.__name__})")

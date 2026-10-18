@@ -56,21 +56,31 @@ def _fallback(r: ResearchReport) -> _Plan:
     return _Plan(ideas=ideas, rationale="Fallback plan: one ad set per persona with the top research angles.")
 
 
-def negotiate(cid: str, brief: ClientBrief, n: int) -> int:
-    """Ask Shlok's budget agent; if the budget can't carry n ad sets, accept the counter-proposal."""
+def negotiate(cid: str, brief: ClientBrief, n: int) -> tuple[int, str]:
+    """Ask Shlok's budget agent; if the budget can't carry n ad sets, accept the counter-proposal.
+    Returns (n_adsets, note for the blueprint rationale)."""
     bus.log(cid, AGENT, f"Proposing {n} ad sets to shlok.budget")
     check = budget_feasibility(brief, n_adsets=n, asked_by=AGENT)
     if check.feasible:
         bus.log(cid, AGENT, f"Budget agreed: {check.suggestion}")
-        return n
-    new_n = max(1, min(check.max_adsets, n))
+        return n, ""
+    if check.max_adsets < 1:  # not even one ad set reaches the learning threshold: nothing left to haggle
+        note = (f"Budget ({check.total_daily:,.0f}/day) is below one ad set's learning threshold "
+                f"({check.min_daily_per_adset:,.0f}/day): 1 ad set, and shlok.budget should optimise for an "
+                f"upstream event (landing page views / add to cart) until conversions accumulate.")
+        bus.say(cid, AGENT, "shlok.budget", "RESPONSE", {"accept": True, "n_adsets": 1, "text":
+                "Understood. Going with 1 ad set; please optimise for an upstream event. The other angles run as "
+                "ads inside it."})
+        bus.log(cid, AGENT, "Budget pushback: below one ad set's threshold → 1 ad set, upstream optimisation event")
+        return 1, note
+    new_n = min(check.max_adsets, n)
     bus.say(cid, AGENT, "shlok.budget", "RESPONSE", {
         "accept": True, "n_adsets": new_n,
         "text": f"Understood. Dropping to the top {new_n} ad set(s) by evidence and testing the other angles "
                 f"as ads inside them."})
     bus.log(cid, AGENT, f"Budget pushback: {check.suggestion} → reducing to {new_n}")
     budget_feasibility(brief, n_adsets=new_n, asked_by=AGENT)  # confirm the counter-proposal on the bus
-    return new_n
+    return new_n, ""
 
 
 def _ads(adset_refs: list[str], brief: ClientBrief) -> dict[str, list[AdPlan]]:
@@ -147,8 +157,10 @@ def strategy_step(state: RuneState) -> dict:
         bus.log(cid, AGENT, f"LLM plan unavailable ({e.__class__.__name__}); one ad set per persona")
         plan = _fallback(research)
 
-    n = negotiate(cid, brief, min(len(plan.ideas) or 1, MAX_ADSETS))
+    n, budget_note = negotiate(cid, brief, min(len(plan.ideas) or 1, MAX_ADSETS))
     bp = build_blueprint(cid, brief, research, plan, n)
+    if budget_note:
+        bp.rationale = f"{bp.rationale} {budget_note}"
     for s in bp.adsets():
         bus.log(cid, AGENT, f"Ad set {s.name}: {len(s.ads)} ads ({', '.join(a.format for a in s.ads)})")
     return {"blueprint": bp.model_dump(mode="json")}

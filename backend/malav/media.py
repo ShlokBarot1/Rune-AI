@@ -129,7 +129,7 @@ def layout(ratio: str, w: int, h: int) -> dict:
     """Pixel geometry per ratio. 9:16 keeps all text between 14% from the top and 35% from the bottom."""
     u = min(w, h) / 100
     if ratio == "9:16":
-        return dict(U=u, PAD=6 * u, TOP=0.14 * h, CTA_TOP=0.65 * h - 12 * u, CAP=0.37 * h,
+        return dict(U=u, PAD=6 * u, TOP=0.14 * h, CTA_TOP=0.65 * h - 16 * u, CAP=0.37 * h,
                     PROD_BOTTOM=0.04 * h, PROD_H=0.30 * h, PROD_CLASS="", BODY_CLASS="tall")
     if ratio == "1.91:1":
         return dict(U=u, PAD=5 * u, TOP=5 * u, CTA_TOP=h - 14 * u, CAP=16 * u,

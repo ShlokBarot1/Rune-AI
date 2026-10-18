@@ -96,7 +96,8 @@ class ContextInsights(BaseModel):
 
 EXTRACT_SYSTEM = """You are the intake agent of an ad agency. From the client's website text and notes,
 extract a draft brief. Use only facts in the input; leave unknown fields null or empty, never guess
-budgets or dates. Prices are numbers in major units. Product image and page URLs must be absolute.
+budgets or dates. products: the brand's core products first (what it is known for and sells most),
+not merchandise or accessories featured on the page. Prices are numbers in major units. Product image and page URLs must be absolute.
 geo = ISO country codes. brand.colors = hex codes that look like brand colours (use the CSS candidates).
 confidence: for each of goal, budget, dates, geo, deliverables, kpis, special_ad_category give 0..1 for
 how sure the input makes you (0 when not mentioned)."""
