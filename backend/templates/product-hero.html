@@ -1,0 +1,18 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+:root { --w: ${W}px; --h: ${H}px; --u: ${U}px; --pad: ${PAD}px; --top: ${TOP}px; --cap: ${CAP}px;
+        --c1: ${C1}; --c2: ${C2}; --font: "${FONT}"; }
+${BASE_CSS}
+.headline { position: absolute; left: var(--pad); right: var(--pad); top: calc(var(--top) + var(--u) * 10);
+  font-size: calc(var(--u) * 8); line-height: 1.05; font-weight: 800; text-shadow: 0 2px 18px rgba(0,0,0,.45); }
+.sub { margin-top: calc(var(--u) * 2.5); font-size: calc(var(--u) * 3.8); font-weight: 500; opacity: .95; }
+.product { bottom: ${PROD_BOTTOM}px; height: ${PROD_H}px; max-width: 70%; }
+.ctawrap { position: absolute; left: var(--pad); top: ${CTA_TOP}px; }
+</style></head><body class="${BODY_CLASS}">
+<div class="bg" style="background-image:url('${BG}')"></div><div class="shade"></div>
+${LOGO}
+<div class="headline">${HEADLINE}<div class="sub">${SUB}</div></div>
+<img class="product ${PROD_CLASS}" src="${PRODUCT}">
+<div class="ctawrap ${CTA_CLASS}"><span class="cta">${CTA}</span></div>
+<div class="caption">${CAPTION}</div>
+</body></html>

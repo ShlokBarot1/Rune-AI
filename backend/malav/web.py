@@ -54,6 +54,20 @@ def ad_library(terms: str, countries: list[str], limit: int = 8) -> list[dict]:
     return r.json().get("data", [])
 
 
+_OG = re.compile(r"""<meta[^>]+(?:property|name)=["']og:image(?::url)?["'][^>]+content=["']([^"']+)""", re.I)
+_OG_REV = re.compile(r"""<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']og:image(?::url)?["']""", re.I)
+
+
+def og_image(url: str) -> str | None:
+    """The page's share image (og:image): on a product page this is almost always the product shot."""
+    html = httpx.get(url, headers=UA, timeout=20, follow_redirects=True).text
+    m = _OG.search(html) or _OG_REV.search(html)
+    if not m:
+        return None
+    img = m.group(1).replace("&amp;", "&")
+    return "https:" + img if img.startswith("//") else img
+
+
 def _norm(h: str) -> str:
     h = h.lstrip("#")
     return "#" + (h if len(h) == 6 else "".join(c * 2 for c in h)).upper()

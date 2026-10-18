@@ -1,0 +1,22 @@
+/* Shared by every ad template. Rendered by Playwright at the exact ratio size (RATIO_SIZES).
+   9:16 safe zones: no text in the top 14% or bottom 35% (Stories/Reels UI covers them). */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: var(--w); height: var(--h); overflow: hidden; background: var(--c1); }
+body { font-family: var(--font), "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #fff; position: relative; }
+.bg { position: absolute; inset: 0; background-size: cover; background-position: center; }
+.shade { position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(0,0,0,.55) 0%, rgba(0,0,0,.05) 45%, rgba(0,0,0,.0) 60%, rgba(0,0,0,.35) 100%); }
+.product { position: absolute; left: 50%; transform: translateX(-50%); object-fit: contain;
+  filter: drop-shadow(0 calc(var(--u) * 2) calc(var(--u) * 3) rgba(0,0,0,.45)); }
+.logo { position: absolute; top: var(--top); left: var(--pad); height: calc(var(--u) * 6); max-width: 30%; object-fit: contain; }
+.brand { position: absolute; top: var(--top); left: var(--pad); font-weight: 700; letter-spacing: .04em;
+  font-size: calc(var(--u) * 3.4); text-transform: uppercase; opacity: .9; }
+.cta { display: inline-block; background: var(--c2); color: var(--c1); font-weight: 800; border-radius: 999px;
+  padding: calc(var(--u) * 1.8) calc(var(--u) * 4.5); font-size: calc(var(--u) * 3.6); letter-spacing: .02em; }
+.caption { position: absolute; left: var(--pad); right: var(--pad); bottom: var(--cap); text-align: center; }
+.caption span { background: rgba(0,0,0,.72); color: #fff; font-weight: 700; line-height: 1.5;
+  font-size: calc(var(--u) * 4); padding: calc(var(--u) * .6) calc(var(--u) * 1.6); border-radius: calc(var(--u) * 1);
+  box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.product.right { left: auto; right: var(--pad); transform: none; }
+body.wide .headline, body.wide .bubble { right: 45%; }   /* 1.91:1 — product owns the right side */
+.caption:empty, .hide { display: none !important; }
