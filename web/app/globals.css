@@ -47,7 +47,7 @@ html, body {
 }
 
 /* ---------- shell ---------- */
-.app { background: var(--canvas); min-height: 100vh; position: relative; overflow-x: hidden; }
+.app { background: var(--canvas); min-height: 100vh; position: relative; overflow-x: clip; }  /* clip, not hidden: hidden breaks sticky sidebars */
 .mist {
   position: absolute; inset: 0 0 auto 0; height: 560px; pointer-events: none;
   background:
@@ -146,7 +146,7 @@ html, body {
 }
 
 /* ---------- pipeline rail ---------- */
-.rail { display: flex; align-items: center; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.rail { display: flex; align-items: center; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 4px; }  /* room for the selected outline */
 .rail::-webkit-scrollbar { display: none; }
 .stage {
   display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 14px 0 8px; border-radius: 999px;

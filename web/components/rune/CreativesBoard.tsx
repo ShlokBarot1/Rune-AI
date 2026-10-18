@@ -2,26 +2,26 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, Download, ExternalLink, Film, ImageIcon, RefreshCw, Save, X } from "lucide-react";
 import { fileUrl, type Json } from "@/lib/api";
-import { editState, requestChanges } from "@/lib/run";
+import { changeStage, editState, reopenNote } from "@/lib/run";
 import { QAChip } from "@/components/rune/Views";
 
 const CTAS = ["SHOP_NOW", "LEARN_MORE", "SIGN_UP", "ORDER_NOW", "GET_OFFER", "BOOK_NOW", "CONTACT_US", "DOWNLOAD", "SUBSCRIBE", "APPLY_NOW"];
 const ctaLabel = (c: string) => c.replace(/_/g, " ").toLowerCase().replace(/^./, (x) => x.toUpperCase());
 
-function Thumb({ c, onOpen }: { c: Json; onOpen: () => void }) {
+/** One asset at a fixed height, so 4:5 and 9:16 of the same ad line up top and bottom. */
+function Thumb({ c, h, onOpen }: { c: Json; h: number; onOpen: () => void }) {
   return (
-    <button onClick={onOpen} className="group flex flex-col gap-2 text-left fade-in">
-      <div className="relative overflow-hidden rounded-[18px] bg-black shadow-sm transition group-hover:-translate-y-0.5 group-hover:shadow-lg"
-        style={{ aspectRatio: `${c.width}/${c.height}` }}>
+    <button onClick={onOpen} className="group flex shrink-0 flex-col gap-2 text-left fade-in">
+      <div className="relative overflow-hidden rounded-[16px] bg-black shadow-sm transition group-hover:-translate-y-0.5 group-hover:shadow-lg"
+        style={{ height: h, aspectRatio: `${c.width}/${c.height}` }}>
         <img src={fileUrl(c.kind === "video" && c.thumbnail_path ? c.thumbnail_path : c.path)} alt={c.creative_id} className="h-full w-full object-cover" />
         {c.kind === "video" && <span className="absolute right-2 top-2 pill dark"><Film size={11} /> {c.duration_s}s</span>}
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="pill dark">{c.kind === "video" ? <Film size={11} /> : <ImageIcon size={11} />}{c.ratio}</span>
         <QAChip qa={c.qa} />
-        {c.parent_id && <span className="pill lime">iteration v{c.version}</span>}
+        {c.parent_id && <span className="pill lime">v{c.version}</span>}
       </div>
-      <div className="line-clamp-2 text-[12.5px] font-semibold leading-snug">{c.ad_copy.headline}</div>
     </button>
   );
 }
@@ -31,8 +31,8 @@ function Counter({ n, max }: { n: number; max: number }) {
 }
 
 /** Full creative: asset, hook, editable copy, QA, tracking; save copy / regenerate while the creatives gate is open. */
-export function CreativeModal({ c, pkg, hooks, cid, editable, onClose, onChanged }: {
-  c: Json; pkg: Json; hooks: Record<string, Json>; cid: string | null; editable: boolean; onClose: () => void; onChanged: () => void;
+export function CreativeModal({ c, pkg, hooks, cid, editable, atGate, onClose, onChanged }: {
+  c: Json; pkg: Json; hooks: Record<string, Json>; cid: string | null; editable: boolean; atGate: boolean; onClose: () => void; onChanged: () => void;
 }) {
   const [copy, setCopy] = useState<Json>(() => ({ ...c.ad_copy }));
   const [note, setNote] = useState("");
@@ -58,7 +58,7 @@ export function CreativeModal({ c, pkg, hooks, cid, editable, onClose, onChanged
   const regenerate = async () => {
     if (!cid) return;
     setBusy("regen");
-    try { await requestChanges(cid, `Regenerate ${c.creative_id}: ${note || "improve it based on the QA notes"}`); setMsg("Sent — the agents are regenerating this asset."); onChanged(); }
+    try { await changeStage(cid, "creatives", `Regenerate ${c.creative_id}: ${note || "improve it based on the QA notes"}`); setMsg("Sent — the agents are regenerating this asset."); onChanged(); }
     catch (e) { setMsg(String((e as Error).message)); } finally { setBusy(null); }
   };
 
@@ -124,6 +124,7 @@ export function CreativeModal({ c, pkg, hooks, cid, editable, onClose, onChanged
 
           {editable ? (
             <div className="flex flex-col gap-2 border-t pt-4" style={{ borderColor: "var(--line)" }}>
+              {!atGate && <div className="pill warn !whitespace-normal !text-[12px]">{reopenNote("Creatives", false)}</div>}
               <div className="flex flex-wrap gap-2">
                 <button className="btn btn-primary" disabled={!!busy} onClick={save}><Save size={14} /> {busy === "save" ? "Saving…" : "Save copy"}</button>
                 <a className="btn btn-ghost" href={fileUrl(c.path)} download><Download size={14} /> Download</a>
@@ -134,7 +135,7 @@ export function CreativeModal({ c, pkg, hooks, cid, editable, onClose, onChanged
               </div>
             </div>
           ) : (
-            <div className="meta border-t pt-3" style={{ borderColor: "var(--line)" }}>Editing opens at the Creatives approval gate. <a className="underline" href={fileUrl(c.path)} download>Download asset</a></div>
+            <div className="meta border-t pt-3" style={{ borderColor: "var(--line)" }}>Editing opens whenever the run is waiting for you (not while agents are working or ads are live). <a className="underline" href={fileUrl(c.path)} download>Download asset</a></div>
           )}
           {msg && <div className="pill blue !whitespace-normal !text-[12px]">{msg}</div>}
         </div>
@@ -144,8 +145,8 @@ export function CreativeModal({ c, pkg, hooks, cid, editable, onClose, onChanged
 }
 
 /** Creatives grouped by ad set with ratio/format tabs; click a creative for the full view. */
-export function CreativesBoard({ pkg, compact = false, hooks = [], cid = null, editable = false, onChanged }: {
-  pkg: Json; compact?: boolean; hooks?: Json[]; cid?: string | null; editable?: boolean; onChanged?: () => void;
+export function CreativesBoard({ pkg, compact = false, hooks = [], cid = null, editable = false, atGate = false, onChanged }: {
+  pkg: Json; compact?: boolean; hooks?: Json[]; cid?: string | null; editable?: boolean; atGate?: boolean; onChanged?: () => void;
 }) {
   const ratios: string[] = useMemo(() => Array.from(new Set(pkg.creatives.map((c: Json) => c.ratio))), [pkg]);
   const [ratio, setRatio] = useState<string>("all");
@@ -165,19 +166,35 @@ export function CreativesBoard({ pkg, compact = false, hooks = [], cid = null, e
       {adsets.map((s) => {
         const items = pkg.creatives.filter((c: Json) => c.adset_ref === s.ref && show(c));
         if (!items.length) return null;
+        const ads: Json[][] = Object.values(items.reduce((m: Record<string, Json[]>, c: Json) => ({ ...m, [c.ad_ref]: [...(m[c.ad_ref] ?? []), c] }), {}));
         return (
           <section key={s.ref} className="card">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div><div className="text-[16px] font-semibold">{s.name}</div><div className="meta">{s.angle}</div></div>
-              <span className="pill">{items.length} assets</span>
+              <span className="pill">{ads.length} ad{ads.length > 1 ? "s" : ""} · {items.length} assets</span>
             </div>
-            <div className={`mt-4 grid items-end gap-5 ${compact ? "grid-cols-2 md:grid-cols-4" : "grid-cols-2 md:grid-cols-3 xl:grid-cols-4"}`}>
-              {items.map((c: Json) => <Thumb key={c.creative_id} c={c} onOpen={() => setOpen(c)} />)}
+            <div className="mt-4 flex flex-col gap-3">
+              {ads.map((group) => {
+                const c0 = group[0], hook = hookMap[c0.hook_id];
+                return (
+                  <div key={c0.ad_ref} className="tile flex flex-col gap-4 md:flex-row">
+                    <div className="flex flex-col gap-2 md:w-[240px] md:shrink-0">
+                      <div className="label">Ad · {c0.ad_ref}</div>
+                      <div className="text-[15px] font-semibold leading-snug">{c0.ad_copy.headline}</div>
+                      {hook && <div className="text-[12.5px] leading-snug" style={{ color: "var(--text-2)" }}>“{hook.text}”</div>}
+                      <p className="meta line-clamp-3 leading-relaxed">{c0.ad_copy.primary_text}</p>
+                    </div>
+                    <div className="flex min-w-0 gap-4 overflow-x-auto pb-1 scroll-thin">
+                      {group.map((c) => <Thumb key={c.creative_id} c={c} h={compact ? 260 : 300} onOpen={() => setOpen(c)} />)}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </section>
         );
       })}
-      {open && <CreativeModal c={open} pkg={pkg} hooks={hookMap} cid={cid} editable={editable} onClose={() => setOpen(null)} onChanged={() => onChanged?.()} />}
+      {open && <CreativeModal c={open} pkg={pkg} hooks={hookMap} cid={cid} editable={editable} atGate={atGate} onClose={() => setOpen(null)} onChanged={() => onChanged?.()} />}
     </div>
   );
 }

@@ -86,7 +86,7 @@ const between = (m: BusMsg) =>
   (m.type === "REQUEST" || m.type === "RESPONSE") && !["human", "theater"].includes(m.recipient) && m.sender !== "human";
 
 /** The dark live panel: every agent step, with agent-to-agent conversations shown as chat bubbles. */
-export function Theater({ clientId, height = 640, compact = false }: { clientId: string | null; height?: number; compact?: boolean }) {
+export function Theater({ clientId, height = 640, compact = false }: { clientId: string | null; height?: number | string; compact?: boolean }) {
   const msgs = useEvents(clientId, 400);
   const box = useRef<HTMLDivElement>(null);  // scroll only the feed, never the page
   useEffect(() => { box.current?.scrollTo({ top: box.current.scrollHeight, behavior: "smooth" }); }, [msgs.length]);

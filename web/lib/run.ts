@@ -20,6 +20,22 @@ export async function uploadImage(cid: string, file: File): Promise<string> {
 /** Send a change request to the waiting gate (the suggestion evaluator + owning agent apply it). */
 export const requestChanges = (cid: string, comment: string) => post(`/runs/${cid}/resume`, { action: "changes", comment });
 
+/** Reopen an earlier stage's approval gate; every stage after it reruns once approved. No-op if already there. */
+export const rewindTo = (cid: string, stage: string) => post(`/malav/runs/${cid}/rewind`, { stage });
+
+/** Change request to any stage: reopens its gate first if the run has moved past it. */
+export async function changeStage(cid: string, stage: string, comment: string) {
+  await rewindTo(cid, stage);
+  return requestChanges(cid, comment);
+}
+
+/** Edits are possible whenever the run waits for a human (not mid-run, not once the ads are live). */
+export const canEdit = (snap: Json | null) => !!snap?.pending?.length && !snap.running && !snap.values?.live;
+
+/** What editing a stage does right now, for the confirm line under an editor. */
+export const reopenNote = (stage: string, atGate: boolean) =>
+  atGate ? "" : `This reopens the ${stage} approval; the stages after it are rebuilt from your edit.`;
+
 /** Every stage of the orchestrated pipeline, in order, with the state key that proves it finished. */
 export const STAGES = [
   { id: "intake", label: "Intake", owner: "malav", done: "brief" },

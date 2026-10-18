@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { Film, ImageIcon, Layers, Pencil, Send, Target, Users, Wallet } from "lucide-react";
 import { fileUrl, money, type Json } from "@/lib/api";
-import { requestChanges } from "@/lib/run";
+import { changeStage, reopenNote } from "@/lib/run";
 
 const sum = (o: Record<string, number> = {}) => Object.values(o).reduce((a, b) => a + b, 0);
 const adsetsOf = (bp: Json): Json[] => bp?.campaigns?.flatMap((c: Json) => c.adsets) ?? [];
@@ -79,7 +79,7 @@ function draftOf(t: Json, persona?: Json): Draft {
   };
 }
 
-export function TargetingView({ v, cid, gateOpen, onSent }: { v: Json; cid: string | null; gateOpen: boolean; onSent: () => void }) {
+export function TargetingView({ v, cid, editable, atGate, onSent }: { v: Json; cid: string | null; editable: boolean; atGate: boolean; onSent: () => void }) {
   const [edit, setEdit] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [busy, setBusy] = useState(false);
@@ -94,7 +94,7 @@ export function TargetingView({ v, cid, gateOpen, onSent }: { v: Json; cid: stri
       return `Ad set ${ref}: age ${d.age_min}-${d.age_max}; genders ${d.genders}; countries ${d.countries}; interests exactly: ${d.interests}; placements ${d.placements}.`;
     });
     setBusy(true);
-    try { await requestChanges(cid, `Apply these manual targeting edits exactly:\n${lines.join("\n")}`); setMsg("Sent to the targeting agent — it resolves interests to Meta IDs and rebuilds the specs."); setDrafts({}); onSent(); }
+    try { await changeStage(cid, "targeting", `Apply these manual targeting edits exactly:\n${lines.join("\n")}`); setMsg("Sent to the targeting agent — it resolves interests to Meta IDs and rebuilds the specs."); setDrafts({}); onSent(); }
     catch (e) { setMsg(String((e as Error).message)); } finally { setBusy(false); }
   };
 
@@ -102,7 +102,7 @@ export function TargetingView({ v, cid, gateOpen, onSent }: { v: Json; cid: stri
     <div className="flex flex-col gap-4 fade-in">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div><div className="label flex items-center gap-1.5"><Target size={12} /> Targeting & placements</div><div className="text-[18px] font-semibold">AI-built audiences, one per ad set</div></div>
-        {changed.length > 0 && <button className="btn btn-lime" disabled={busy || !gateOpen} onClick={send}><Send size={14} /> Apply {changed.length} edit{changed.length > 1 ? "s" : ""}</button>}
+        {changed.length > 0 && <button className="btn btn-lime" disabled={busy || !editable} onClick={send}><Send size={14} /> Apply {changed.length} edit{changed.length > 1 ? "s" : ""}</button>}
       </div>
       {msg && <div className="pill blue !whitespace-normal !text-[12px]">{msg}</div>}
       <div className="grid gap-4 lg:grid-cols-2">
@@ -115,7 +115,7 @@ export function TargetingView({ v, cid, gateOpen, onSent }: { v: Json; cid: stri
             <section key={t.adset_ref} className="card flex flex-col gap-3">
               <div className="flex items-start justify-between gap-2">
                 <div><div className="text-[15px] font-semibold">{s?.name ?? t.adset_ref}</div><div className="meta">{personas[s?.persona_ref]?.name ?? s?.persona_ref}</div></div>
-                {gateOpen && <button className="btn btn-ghost !h-8 !text-[12px]" onClick={() => setEdit(edit === t.adset_ref ? null : t.adset_ref)}><Pencil size={12} /> {edit === t.adset_ref ? "Done" : "Edit"}</button>}
+                {editable && <button className="btn btn-ghost !h-8 !text-[12px]" onClick={() => setEdit(edit === t.adset_ref ? null : t.adset_ref)}><Pencil size={12} /> {edit === t.adset_ref ? "Done" : "Edit"}</button>}
               </div>
               {edit === t.adset_ref ? (
                 <div className="grid gap-2 sm:grid-cols-2">
@@ -141,7 +141,8 @@ export function TargetingView({ v, cid, gateOpen, onSent }: { v: Json; cid: stri
           );
         })}
       </div>
-      {!gateOpen && <div className="meta">Targeting edits open at the Targeting approval gate.</div>}
+      {!editable ? <div className="meta">Editing opens whenever the run is waiting for you (not while agents work or once ads are live).</div>
+        : changed.length > 0 && !atGate && <div className="meta">{reopenNote("Targeting", false)} Only the Meta build and audit rerun; creatives stay.</div>}
     </div>
   );
 }

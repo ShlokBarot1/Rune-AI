@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ArrowUpRight, Images, Plus, ShieldCheck } from "lucide-react";
 import { money, msgText, useEvents, type Json } from "@/lib/api";
-import { STAGES, currentStage, stageStates, useRun, type StageId } from "@/lib/run";
+import { STAGES, canEdit, currentStage, stageStates, useRun, type StageId } from "@/lib/run";
 import { PipelineRail, Theater } from "@/components/rune/Pipeline";
 import { AuditSummary, BriefCard, HooksView, ResearchView, StrategyView } from "@/components/rune/Views";
 import { CreativesBoard } from "@/components/rune/CreativesBoard";
@@ -24,9 +24,9 @@ function Stat({ label, value, sub, dark = false, href }: { label: string; value:
   );
 }
 
-function ShlokStage({ id, v, cid, gate, reload }: { id: StageId; v: Json; cid: string | null; gate?: string; reload: () => void }) {
+function ShlokStage({ id, v, cid, gate, editable, reload }: { id: StageId; v: Json; cid: string | null; gate?: string; editable: boolean; reload: () => void }) {
   if (id === "budget") return <BudgetView v={v} />;
-  if (id === "targeting") return <TargetingView v={v} cid={cid} gateOpen={gate === "targeting"} onSent={reload} />;
+  if (id === "targeting") return <TargetingView v={v} cid={cid} editable={editable} atGate={gate === "targeting"} onSent={reload} />;
   if (id === "launch") return <MetaBuildView v={v} />;
   if ((id === "audit" || id === "go_live") && v.audit) return <AuditSummary a={v.audit} round={v.audit_round} />;
   return <div className="tile py-10 text-center text-[13px]" style={{ color: "var(--text-2)" }}>This stage hasn&apos;t run yet.</div>;
@@ -96,7 +96,7 @@ export default function MissionControl() {
     </div>
   );
 
-  const pkg = v.package, pending = snap?.pending?.[0];
+  const pkg = v.package, pending = snap?.pending?.[0], editable = canEdit(snap);
   const done = STAGES.filter((s) => states[s.id] === "done").length;
   const nego = msgs.filter((m) => (m.sender === "malav.strategy" && m.recipient === "shlok.budget") || (m.sender === "shlok.budget" && m.recipient === "malav.strategy"));
   const negotiation = nego.length ? nego.map((m) => (
@@ -137,19 +137,19 @@ export default function MissionControl() {
         <div className="flex min-w-0 flex-col gap-4">
           {pending && clientId && <ApprovalDock key={pending.interrupt_id} item={pending} clientId={clientId} onDone={reload} />}
           {stage === "intake" && (editing && v.brief && clientId
-            ? <BriefEditor cid={clientId} brief={v.brief} onCancel={() => setEditing(false)} onSaved={() => { setEditing(false); reload(); }} />
-            : <BriefCard b={v.brief ?? null} onEdit={pending?.gate === "intake" ? () => setEditing(true) : undefined} />)}
+            ? <BriefEditor cid={clientId} brief={v.brief} atGate={pending?.gate === "intake"} onCancel={() => setEditing(false)} onSaved={() => { setEditing(false); reload(); }} />
+            : <BriefCard b={v.brief ?? null} onEdit={editable ? () => setEditing(true) : undefined} />)}
           {stage === "research" && <ResearchView r={v.research ?? null} />}
           {stage === "strategy" && <StrategyView bp={v.blueprint ?? null} negotiation={negotiation} />}
           {stage === "hooks" && <HooksView hooks={v.hooks ?? null} bp={v.blueprint ?? null} brand={v.brief?.business_name ?? "Brand"} />}
           {stage === "creatives" && (pkg
-            ? <CreativesBoard pkg={pkg} compact hooks={v.hooks ?? []} cid={clientId} editable={pending?.gate === "creatives"} onChanged={reload} />
+            ? <CreativesBoard pkg={pkg} compact hooks={v.hooks ?? []} cid={clientId} editable={editable} atGate={pending?.gate === "creatives"} onChanged={reload} />
             : <CreativesProgress msgs={msgs} />)}
-          {["budget", "targeting", "launch", "audit", "go_live"].includes(stage) && <ShlokStage id={stage} v={v} cid={clientId} gate={pending?.gate} reload={reload} />}
+          {["budget", "targeting", "launch", "audit", "go_live"].includes(stage) && <ShlokStage id={stage} v={v} cid={clientId} gate={pending?.gate} editable={editable} reload={reload} />}
           {stage === "creatives" && pkg && <Link href="/studio" className="btn btn-ghost self-start"><Images size={15} /> Open Creative Studio</Link>}
           {stage === "audit" && v.audit && <Link href="/audit" className="btn btn-ghost self-start"><ShieldCheck size={15} /> Full audit report</Link>}
         </div>
-        <div className="xl:sticky xl:top-6 xl:self-start"><Theater clientId={clientId} height={720} /></div>
+        <div className="xl:sticky xl:top-6 xl:self-start"><Theater clientId={clientId} height="calc(100vh - 48px)" /></div>
       </div>
     </div>
   );

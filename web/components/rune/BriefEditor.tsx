@@ -2,7 +2,7 @@
 import { useRef, useState } from "react";
 import { ImagePlus, Plus, Save, Trash2, Upload, X } from "lucide-react";
 import { fileUrl, type Json } from "@/lib/api";
-import { editState, uploadImage } from "@/lib/run";
+import { editState, reopenNote, uploadImage } from "@/lib/run";
 
 const GOALS = ["sales", "leads", "traffic", "awareness", "engagement", "app_installs"];
 const RATIOS = ["1:1", "4:5", "9:16", "1.91:1"];
@@ -32,7 +32,7 @@ function UploadButton({ cid, onDone, label }: { cid: string; onDone: (path: stri
 }
 
 /** Edit every brief field, upload a logo / product photos, then save (the run stays at the intake gate). */
-export default function BriefEditor({ cid, brief, onSaved, onCancel }: { cid: string; brief: Json; onSaved: () => void; onCancel: () => void }) {
+export default function BriefEditor({ cid, brief, atGate = true, onSaved, onCancel }: { cid: string; brief: Json; atGate?: boolean; onSaved: () => void; onCancel: () => void }) {
   const [b, setB] = useState<Json>(() => structuredClone(brief));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -130,9 +130,10 @@ export default function BriefEditor({ cid, brief, onSaved, onCancel }: { cid: st
         <Field label="Landing pages (comma separated)"><textarea className="input min-h-16" value={(b.landing_pages ?? []).join(", ")} onChange={(e) => set("landing_pages", list(e.target.value))} /></Field>
       </div>
 
+      {!atGate && <div className="pill warn !whitespace-normal !text-[12px]">{reopenNote("Intake", false)} Research, strategy, hooks and creatives are redone after you approve it.</div>}
       {err && <div className="pill bad !whitespace-normal !text-[12px]">{err}</div>}
       <div className="flex gap-2">
-        <button className="btn btn-primary" disabled={busy} onClick={save}><Save size={14} /> {busy ? "Saving…" : "Save brief"}</button>
+        <button className="btn btn-primary" disabled={busy} onClick={save}><Save size={14} /> {busy ? "Saving…" : atGate ? "Save brief" : "Save & rebuild from intake"}</button>
         <button className="btn btn-ghost" onClick={onCancel}>Cancel</button>
       </div>
     </section>

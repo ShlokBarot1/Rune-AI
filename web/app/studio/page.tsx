@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { Download, Film, ImageIcon, Images, ShieldCheck } from "lucide-react";
 import { fileUrl, type Json } from "@/lib/api";
-import { useRun } from "@/lib/run";
+import { canEdit, useRun } from "@/lib/run";
 import { CreativesBoard } from "@/components/rune/CreativesBoard";
 import ApprovalDock from "@/components/rune/ApprovalDock";
 
@@ -62,7 +62,7 @@ export default function CreativeStudio() {
           </div>
 
           {gateOpen && clientId && <ApprovalDock key={pending.interrupt_id} item={pending} clientId={clientId} onDone={reload} />}
-          <CreativesBoard pkg={pkg} hooks={v.hooks ?? []} cid={clientId} editable={gateOpen} onChanged={reload} />
+          <CreativesBoard pkg={pkg} hooks={v.hooks ?? []} cid={clientId} editable={canEdit(snap)} atGate={gateOpen} onChanged={reload} />
         </>
       )}
     </div>
