@@ -66,6 +66,25 @@ def upload_image(path: str) -> str:
     return next(iter(body["images"].values()))["hash"]
 
 
+def check() -> None:
+    """`python -m shlok.meta` — verify the token, ad account and page from .env."""
+    me = api("GET", "me", params={"fields": "id,name"})
+    print(f"token ok: {me['name']} ({me['id']})")
+    perms = [p["permission"] for p in api("GET", "me/permissions")["data"] if p["status"] == "granted"]
+    missing = {"ads_management", "ads_read", "pages_manage_ads"} - set(perms)
+    print("permissions:", ", ".join(perms), f"| MISSING: {missing}" if missing else "")
+    facts = account_facts()
+    print(f"ad account {account()}: currency {facts['currency']}, min daily budget "
+          f"{int(facts['min_daily_budget']) / 100}, status {facts['account_status']}")
+    if not os.getenv("META_PAGE_ID"):
+        print("page: META_PAGE_ID not set — needed to create ad creatives")
+        return
+    pages = {p["id"]: p["name"] for p in api("GET", f"{account()}/promote_pages", params={"fields": "id,name"})["data"]}
+    pid = os.environ["META_PAGE_ID"]
+    print(f"page ok: {pages[pid]}" if pid in pages else
+          f"page {pid}: not listed in promote_pages (fine for sandbox if creatives still build)")
+
+
 def upload_video(path: str, wait_s: int = 300) -> str:
     with open(path, "rb") as f:
         vid = api("POST", f"{account()}/advideos", files={"source": (Path(path).name, f, "video/mp4")}, timeout=600)["id"]
@@ -78,3 +97,8 @@ def upload_video(path: str, wait_s: int = 300) -> str:
             raise MetaError(f"video {path} failed processing")
         time.sleep(5)
     raise MetaError(f"video {path} not ready after {wait_s}s")
+
+
+if __name__ == "__main__":
+    import core  # noqa: F401  (loads .env)
+    check()
