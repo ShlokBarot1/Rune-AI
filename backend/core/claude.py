@@ -1,23 +1,28 @@
-"""Claude (Anthropic API) provider with spend guardrails. Used by core.llm for the teams in RUNE_CLAUDE_FOR.
+"""Claude via the Claude Code CLI (`claude -p`), logged into the user's Claude plan — no API credits.
 
-Guardrails:
-  * CLAUDE_MAX_TOKENS  (default 2048)    hard cap on output tokens per call
-  * CLAUDE_DAILY_TOKENS (default 200000) input+output tokens per UTC day; over it, calls fall
-    through to the free providers instead of spending more
-  * effort "low": the agents' calls are short JSON / summaries, low effort keeps thinking small
+Runs headless on this machine with no tools, no MCP servers, no settings and no saved session, so each
+call is a plain prompt -> answer. Used by core.llm for the teams in RUNE_CLAUDE_FOR.
+
+Guardrails (protect the plan's usage for the user's own Claude Code work):
+  * CLAUDE_DAILY_TOKENS (default 150000) input+output tokens per UTC day; over it, calls fall through
+    to the free providers
+  * CLAUDE_MAX_TOKENS (default 2048) output cap per call
+  * --effort low: the agents' calls are short JSON / summaries
+  * when the plan's own usage limit is hit, the CLI errors and the chain falls through as well
 """
 from __future__ import annotations
 
+import json
 import os
+import shutil
+import subprocess
+import tempfile
 from datetime import datetime, timezone
-from functools import lru_cache
 from typing import Optional
-
-import anthropic
 
 from . import bus
 
-MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5")
+MODEL = os.getenv("CLAUDE_MODEL", "sonnet")
 
 
 class BudgetExceeded(RuntimeError):
@@ -25,12 +30,7 @@ class BudgetExceeded(RuntimeError):
 
 
 def enabled() -> bool:
-    return bool(os.getenv("ANTHROPIC_API_KEY"))
-
-
-@lru_cache(maxsize=1)
-def _client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(timeout=120.0, max_retries=2)
+    return os.getenv("RUNE_USE_CLAUDE", "1") == "1" and shutil.which("claude") is not None
 
 
 def _db():
@@ -50,39 +50,38 @@ def used_today() -> int:
     return int(row[0])
 
 
-def _record(usage) -> None:
+def _record(input_tokens: int, output_tokens: int) -> None:
     with _db() as con:
-        con.execute("insert into llm_usage values (?,?,?,?)", (_today(), "claude", usage.input_tokens, usage.output_tokens))
-
-
-def _content(user: str, images: Optional[list[str]]) -> list[dict]:
-    """images are data URLs (core.llm.image_url) or http(s) URLs."""
-    blocks: list[dict] = []
-    for img in images or []:
-        if img.startswith("data:"):
-            mime, data = img[5:].split(";base64,", 1)
-            blocks.append({"type": "image", "source": {"type": "base64", "media_type": mime, "data": data}})
-        else:
-            blocks.append({"type": "image", "source": {"type": "url", "url": img}})
-    blocks.append({"type": "text", "text": user})
-    return blocks
+        con.execute("insert into llm_usage values (?,?,?,?)", (_today(), "claude", input_tokens, output_tokens))
 
 
 def chat(system: str, user: str, images: Optional[list[str]] = None) -> str:
-    budget = int(os.getenv("CLAUDE_DAILY_TOKENS", "200000"))
+    if images:
+        raise NotImplementedError("image input not wired for the Claude Code CLI; next provider handles it")
+    budget = int(os.getenv("CLAUDE_DAILY_TOKENS", "150000"))
     if used_today() >= budget:
         raise BudgetExceeded(f"Claude daily budget of {budget} tokens used")
 
-    response = _client().beta.messages.create(
-        model=MODEL,
-        max_tokens=int(os.getenv("CLAUDE_MAX_TOKENS", "2048")),
-        output_config={"effort": "low"},
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-        system=system,
-        messages=[{"role": "user", "content": _content(user, images)}],
-    )
-    _record(response.usage)
-    if response.stop_reason == "refusal":
-        raise RuntimeError(f"Claude declined: {response.stop_details}")
-    return "".join(b.text for b in response.content if b.type == "text")
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as f:
+        f.write(system)  # system prompts with skills are long; a file avoids Windows command-line limits
+    env = {**os.environ, "CLAUDE_CODE_MAX_OUTPUT_TOKENS": os.getenv("CLAUDE_MAX_TOKENS", "2048")}
+    env.pop("ANTHROPIC_API_KEY", None)  # never bill API credits; use the logged-in plan
+    try:
+        proc = subprocess.run(
+            ["claude", "-p", "--model", MODEL, "--effort", "low", "--system-prompt-file", f.name,
+             "--tools", "", "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence",
+             "--output-format", "json"],
+            input=user, capture_output=True, text=True, encoding="utf-8", timeout=180, env=env,
+            cwd=tempfile.gettempdir())
+    finally:
+        os.unlink(f.name)
+    try:
+        out = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {(proc.stderr or proc.stdout)[:200]}")
+    usage = out.get("usage") or {}
+    _record(usage.get("input_tokens", 0) + usage.get("cache_read_input_tokens", 0)
+            + usage.get("cache_creation_input_tokens", 0), usage.get("output_tokens", 0))
+    if out.get("is_error"):
+        raise RuntimeError(f"claude: {out.get('result') or out.get('subtype')}")
+    return out.get("result", "")
