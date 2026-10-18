@@ -1,0 +1,25 @@
+{
+  "client_id": "demo_brewbloom",
+  "adset_ref": "as_wfh_price",
+  "winners": [
+    {
+      "creative_id": "cr_ad_wfh_1_4x5",
+      "hook": "Your café habit costs ₹7,500 a month. This costs ₹55 a cup.",
+      "ctr": 0.021,
+      "cpa": 168
+    }
+  ],
+  "losers": [
+    {
+      "creative_id": "cr_ad_wfh_2_4x5",
+      "reason": "hook rate 0.09; first frame is text-heavy"
+    }
+  ],
+  "insight": "Price-anchor hooks beat speed hooks 2.1x on CTR for WFH persona.",
+  "n_new": 3,
+  "formats": [
+    "image 4:5",
+    "video 9:16"
+  ],
+  "direction": "More price-anchor variants; open on the café receipt visual."
+}

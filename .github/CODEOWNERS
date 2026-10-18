@@ -1,0 +1,9 @@
+# Shared contract and wiring: both must approve
+/backend/core/      @ShlokBarot1 @MalavThakor24
+/backend/graph.py   @ShlokBarot1 @MalavThakor24
+/backend/fixtures/  @ShlokBarot1 @MalavThakor24
+/backend/auditor/   @ShlokBarot1 @MalavThakor24
+/backend/tests/     @ShlokBarot1 @MalavThakor24
+
+/backend/malav/     @MalavThakor24
+/backend/shlok/     @ShlokBarot1

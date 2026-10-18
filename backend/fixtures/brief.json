@@ -1,0 +1,79 @@
+{
+  "client_id": "demo_brewbloom",
+  "business_name": "Brewbloom",
+  "website": "https://brewbloom.example.com",
+  "industry": "D2C food & beverage",
+  "products": [
+    {
+      "name": "Brewbloom Cold Brew Concentrate (500ml)",
+      "url": "https://brewbloom.example.com/cold-brew",
+      "price": 549.0,
+      "usp": [
+        "Ready in 10 seconds",
+        "Single-origin Chikmagalur beans",
+        "No sugar added"
+      ],
+      "images": [
+        "fixtures/media/placeholder.png"
+      ]
+    }
+  ],
+  "goal": "sales",
+  "kpi_targets": {
+    "target_cpa": 200.0,
+    "target_roas": 2.5,
+    "target_ctr": null
+  },
+  "geo": [
+    "IN"
+  ],
+  "languages": [
+    "en"
+  ],
+  "audience_notes": "Urban working professionals 22-40 who buy café coffee daily.",
+  "brand": {
+    "logo": null,
+    "colors": [
+      "#1F2D4D",
+      "#E8D9C4"
+    ],
+    "fonts": [
+      "SF Pro"
+    ],
+    "tone": "calm, premium, witty",
+    "do_words": [],
+    "dont_words": [
+      "cheap",
+      "guaranteed"
+    ]
+  },
+  "budget": {
+    "total": 150000.0,
+    "currency": "INR",
+    "start": "2026-11-01",
+    "end": "2026-11-30",
+    "daily_cap": null,
+    "flexibility_pct": 0.0,
+    "notes": ""
+  },
+  "deliverables": {
+    "n_images": 2,
+    "n_videos": 2,
+    "ratios": [
+      "4:5",
+      "9:16"
+    ],
+    "video_lengths_s": [
+      15
+    ],
+    "platforms": [
+      "facebook",
+      "instagram"
+    ]
+  },
+  "special_ad_category": "none",
+  "landing_pages": [
+    "https://brewbloom.example.com/cold-brew"
+  ],
+  "constraints": []
+}

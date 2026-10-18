@@ -1,0 +1,69 @@
+{
+  "client_id": "demo_brewbloom",
+  "campaigns": [
+    {
+      "ref": "c_tof_sales",
+      "name": "Brewbloom · TOF · Sales",
+      "objective": "OUTCOME_SALES",
+      "funnel_stage": "TOF",
+      "rationale": "",
+      "adsets": [
+        {
+          "ref": "as_wfh_price",
+          "name": "WFH · café price",
+          "persona_ref": "p_wfh",
+          "angle": "café price vs ₹55/cup",
+          "rationale": "",
+          "ads": [
+            {
+              "ref": "ad_wfh_1",
+              "hook_id": "h1",
+              "format": "image",
+              "ratios": [
+                "4:5",
+                "9:16"
+              ]
+            },
+            {
+              "ref": "ad_wfh_2",
+              "hook_id": "h2",
+              "format": "video",
+              "ratios": [
+                "4:5",
+                "9:16"
+              ]
+            }
+          ]
+        },
+        {
+          "ref": "as_fit_nosugar",
+          "name": "Fitness · no sugar",
+          "persona_ref": "p_fit",
+          "angle": "no sugar pre-workout",
+          "rationale": "",
+          "ads": [
+            {
+              "ref": "ad_fit_1",
+              "hook_id": "h3",
+              "format": "image",
+              "ratios": [
+                "4:5",
+                "9:16"
+              ]
+            },
+            {
+              "ref": "ad_fit_2",
+              "hook_id": "h4",
+              "format": "video",
+              "ratios": [
+                "4:5",
+                "9:16"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "rationale": "One TOF sales campaign, 2 ad sets = what ₹5,000/day supports at ₹200 CPA."
+}

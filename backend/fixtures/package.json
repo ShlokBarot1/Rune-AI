@@ -1,0 +1,330 @@
+{
+  "client_id": "demo_brewbloom",
+  "blueprint": {
+    "client_id": "demo_brewbloom",
+    "campaigns": [
+      {
+        "ref": "c_tof_sales",
+        "name": "Brewbloom · TOF · Sales",
+        "objective": "OUTCOME_SALES",
+        "funnel_stage": "TOF",
+        "rationale": "",
+        "adsets": [
+          {
+            "ref": "as_wfh_price",
+            "name": "WFH · café price",
+            "persona_ref": "p_wfh",
+            "angle": "café price vs ₹55/cup",
+            "rationale": "",
+            "ads": [
+              {
+                "ref": "ad_wfh_1",
+                "hook_id": "h1",
+                "format": "image",
+                "ratios": [
+                  "4:5",
+                  "9:16"
+                ]
+              },
+              {
+                "ref": "ad_wfh_2",
+                "hook_id": "h2",
+                "format": "video",
+                "ratios": [
+                  "4:5",
+                  "9:16"
+                ]
+              }
+            ]
+          },
+          {
+            "ref": "as_fit_nosugar",
+            "name": "Fitness · no sugar",
+            "persona_ref": "p_fit",
+            "angle": "no sugar pre-workout",
+            "rationale": "",
+            "ads": [
+              {
+                "ref": "ad_fit_1",
+                "hook_id": "h3",
+                "format": "image",
+                "ratios": [
+                  "4:5",
+                  "9:16"
+                ]
+              },
+              {
+                "ref": "ad_fit_2",
+                "hook_id": "h4",
+                "format": "video",
+                "ratios": [
+                  "4:5",
+                  "9:16"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "rationale": "One TOF sales campaign, 2 ad sets = what ₹5,000/day supports at ₹200 CPA."
+  },
+  "creatives": [
+    {
+      "creative_id": "cr_ad_wfh_1_4x5",
+      "campaign_ref": "c_tof_sales",
+      "adset_ref": "as_wfh_price",
+      "ad_ref": "ad_wfh_1",
+      "hook_id": "h1",
+      "kind": "image",
+      "ratio": "4:5",
+      "width": 1080,
+      "height": 1350,
+      "duration_s": null,
+      "path": "fixtures/media/placeholder.png",
+      "thumbnail_path": null,
+      "ad_copy": {
+        "primary_text": "Café cold brew at ₹55 a cup. Pour, add milk, done.",
+        "headline": "Café cold brew, ₹55/cup",
+        "description": "",
+        "cta": "SHOP_NOW"
+      },
+      "landing_url": "https://brewbloom.example.com/cold-brew?utm_source=meta&utm_medium=paid&utm_campaign=c_tof_sales&utm_content=ad_wfh_1",
+      "model_used": "fixture",
+      "template_id": null,
+      "prompt": "",
+      "qa": {
+        "score": 90.0,
+        "passed": true,
+        "checks": {},
+        "notes": ""
+      },
+      "version": 1,
+      "parent_id": null
+    },
+    {
+      "creative_id": "cr_ad_wfh_1_9x16",
+      "campaign_ref": "c_tof_sales",
+      "adset_ref": "as_wfh_price",
+      "ad_ref": "ad_wfh_1",
+      "hook_id": "h1",
+      "kind": "image",
+      "ratio": "9:16",
+      "width": 1080,
+      "height": 1920,
+      "duration_s": null,
+      "path": "fixtures/media/placeholder.png",
+      "thumbnail_path": null,
+      "ad_copy": {
+        "primary_text": "Café cold brew at ₹55 a cup. Pour, add milk, done.",
+        "headline": "Café cold brew, ₹55/cup",
+        "description": "",
+        "cta": "SHOP_NOW"
+      },
+      "landing_url": "https://brewbloom.example.com/cold-brew?utm_source=meta&utm_medium=paid&utm_campaign=c_tof_sales&utm_content=ad_wfh_1",
+      "model_used": "fixture",
+      "template_id": null,
+      "prompt": "",
+      "qa": {
+        "score": 90.0,
+        "passed": true,
+        "checks": {},
+        "notes": ""
+      },
+      "version": 1,
+      "parent_id": null
+    },
+    {
+      "creative_id": "cr_ad_wfh_2_4x5",
+      "campaign_ref": "c_tof_sales",
+      "adset_ref": "as_wfh_price",
+      "ad_ref": "ad_wfh_2",
+      "hook_id": "h2",
+      "kind": "video",
+      "ratio": "4:5",
+      "width": 1080,
+      "height": 1350,
+      "duration_s": 15.0,
+      "path": "fixtures/media/placeholder.mp4",
+      "thumbnail_path": "fixtures/media/placeholder.png",
+      "ad_copy": {
+        "primary_text": "10 seconds to café-quality cold brew at home.",
+        "headline": "Cold brew in 10 seconds",
+        "description": "",
+        "cta": "SHOP_NOW"
+      },
+      "landing_url": "https://brewbloom.example.com/cold-brew?utm_source=meta&utm_medium=paid&utm_campaign=c_tof_sales&utm_content=ad_wfh_2",
+      "model_used": "fixture",
+      "template_id": null,
+      "prompt": "",
+      "qa": {
+        "score": 90.0,
+        "passed": true,
+        "checks": {},
+        "notes": ""
+      },
+      "version": 1,
+      "parent_id": null
+    },
+    {
+      "creative_id": "cr_ad_wfh_2_9x16",
+      "campaign_ref": "c_tof_sales",
+      "adset_ref": "as_wfh_price",
+      "ad_ref": "ad_wfh_2",
+      "hook_id": "h2",
+      "kind": "video",
+      "ratio": "9:16",
+      "width": 1080,
+      "height": 1920,
+      "duration_s": 15.0,
+      "path": "fixtures/media/placeholder.mp4",
+      "thumbnail_path": "fixtures/media/placeholder.png",
+      "ad_copy": {
+        "primary_text": "10 seconds to café-quality cold brew at home.",
+        "headline": "Cold brew in 10 seconds",
+        "description": "",
+        "cta": "SHOP_NOW"
+      },
+      "landing_url": "https://brewbloom.example.com/cold-brew?utm_source=meta&utm_medium=paid&utm_campaign=c_tof_sales&utm_content=ad_wfh_2",
+      "model_used": "fixture",
+      "template_id": null,
+      "prompt": "",
+      "qa": {
+        "score": 90.0,
+        "passed": true,
+        "checks": {},
+        "notes": ""
+      },
+      "version": 1,
+      "parent_id": null
+    },
+    {
+      "creative_id": "cr_ad_fit_1_4x5",
+      "campaign_ref": "c_tof_sales",
+      "adset_ref": "as_fit_nosugar",
+      "ad_ref": "ad_fit_1",
+      "hook_id": "h3",
+      "kind": "image",
+      "ratio": "4:5",
+      "width": 1080,
+      "height": 1350,
+      "duration_s": null,
+      "path": "fixtures/media/placeholder.png",
+      "thumbnail_path": null,
+      "ad_copy": {
+        "primary_text": "Clean caffeine before the gym. No sugar, all kick.",
+        "headline": "Zero-sugar pre-workout brew",
+        "description": "",
+        "cta": "SHOP_NOW"
+      },
+      "landing_url": "https://brewbloom.example.com/cold-brew?utm_source=meta&utm_medium=paid&utm_campaign=c_tof_sales&utm_content=ad_fit_1",
+      "model_used": "fixture",
+      "template_id": null,
+      "prompt": "",
+      "qa": {
+        "score": 90.0,
+        "passed": true,
+        "checks": {},
+        "notes": ""
+      },
+      "version": 1,
+      "parent_id": null
+    },
+    {
+      "creative_id": "cr_ad_fit_1_9x16",
+      "campaign_ref": "c_tof_sales",
+      "adset_ref": "as_fit_nosugar",
+      "ad_ref": "ad_fit_1",
+      "hook_id": "h3",
+      "kind": "image",
+      "ratio": "9:16",
+      "width": 1080,
+      "height": 1920,
+      "duration_s": null,
+      "path": "fixtures/media/placeholder.png",
+      "thumbnail_path": null,
+      "ad_copy": {
+        "primary_text": "Clean caffeine before the gym. No sugar, all kick.",
+        "headline": "Zero-sugar pre-workout brew",
+        "description": "",
+        "cta": "SHOP_NOW"
+      },
+      "landing_url": "https://brewbloom.example.com/cold-brew?utm_source=meta&utm_medium=paid&utm_campaign=c_tof_sales&utm_content=ad_fit_1",
+      "model_used": "fixture",
+      "template_id": null,
+      "prompt": "",
+      "qa": {
+        "score": 90.0,
+        "passed": true,
+        "checks": {},
+        "notes": ""
+      },
+      "version": 1,
+      "parent_id": null
+    },
+    {
+      "creative_id": "cr_ad_fit_2_4x5",
+      "campaign_ref": "c_tof_sales",
+      "adset_ref": "as_fit_nosugar",
+      "ad_ref": "ad_fit_2",
+      "hook_id": "h4",
+      "kind": "video",
+      "ratio": "4:5",
+      "width": 1080,
+      "height": 1350,
+      "duration_s": 15.0,
+      "path": "fixtures/media/placeholder.mp4",
+      "thumbnail_path": "fixtures/media/placeholder.png",
+      "ad_copy": {
+        "primary_text": "Most iced lattes hide 30g of sugar. Ours: zero.",
+        "headline": "Cold brew. Zero sugar.",
+        "description": "",
+        "cta": "SHOP_NOW"
+      },
+      "landing_url": "https://brewbloom.example.com/cold-brew?utm_source=meta&utm_medium=paid&utm_campaign=c_tof_sales&utm_content=ad_fit_2",
+      "model_used": "fixture",
+      "template_id": null,
+      "prompt": "",
+      "qa": {
+        "score": 90.0,
+        "passed": true,
+        "checks": {},
+        "notes": ""
+      },
+      "version": 1,
+      "parent_id": null
+    },
+    {
+      "creative_id": "cr_ad_fit_2_9x16",
+      "campaign_ref": "c_tof_sales",
+      "adset_ref": "as_fit_nosugar",
+      "ad_ref": "ad_fit_2",
+      "hook_id": "h4",
+      "kind": "video",
+      "ratio": "9:16",
+      "width": 1080,
+      "height": 1920,
+      "duration_s": 15.0,
+      "path": "fixtures/media/placeholder.mp4",
+      "thumbnail_path": "fixtures/media/placeholder.png",
+      "ad_copy": {
+        "primary_text": "Most iced lattes hide 30g of sugar. Ours: zero.",
+        "headline": "Cold brew. Zero sugar.",
+        "description": "",
+        "cta": "SHOP_NOW"
+      },
+      "landing_url": "https://brewbloom.example.com/cold-brew?utm_source=meta&utm_medium=paid&utm_campaign=c_tof_sales&utm_content=ad_fit_2",
+      "model_used": "fixture",
+      "template_id": null,
+      "prompt": "",
+      "qa": {
+        "score": 90.0,
+        "passed": true,
+        "checks": {},
+        "notes": ""
+      },
+      "version": 1,
+      "parent_id": null
+    }
+  ]
+}

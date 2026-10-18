@@ -1,0 +1,30 @@
+[
+  {
+    "id": "h1",
+    "adset_ref": "as_wfh_price",
+    "text": "Your café habit costs ₹7,500 a month. This costs ₹55 a cup.",
+    "framework": "price anchor",
+    "critic_score": 8.5
+  },
+  {
+    "id": "h2",
+    "adset_ref": "as_wfh_price",
+    "text": "10 seconds. Café cold brew. No barista.",
+    "framework": "speed",
+    "critic_score": 8.0
+  },
+  {
+    "id": "h3",
+    "adset_ref": "as_fit_nosugar",
+    "text": "Pre-workout coffee with zero sugar.",
+    "framework": "benefit",
+    "critic_score": 7.5
+  },
+  {
+    "id": "h4",
+    "adset_ref": "as_fit_nosugar",
+    "text": "What's really in your iced latte?",
+    "framework": "curiosity",
+    "critic_score": 7.8
+  }
+]

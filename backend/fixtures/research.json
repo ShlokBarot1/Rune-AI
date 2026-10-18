@@ -1,0 +1,77 @@
+{
+  "client_id": "demo_brewbloom",
+  "summary": "Café-quality cold brew at home is the gap; competitors push instant coffee on price.",
+  "product_insights": [
+    "Main objection: 'cold brew takes hours' — concentrate removes it",
+    "₹549 ≈ 10 cups ≈ ₹55/cup vs ₹250 café"
+  ],
+  "personas": [
+    {
+      "ref": "p_wfh",
+      "name": "WFH Professional",
+      "description": "Remote worker, 24-35, 3+ café orders a week",
+      "age_range": [
+        24,
+        35
+      ],
+      "genders": [
+        "all"
+      ],
+      "interests": [
+        "Coffee",
+        "Remote work",
+        "Productivity"
+      ],
+      "pains": [
+        "₹250/cup café habit",
+        "Delivery wait"
+      ],
+      "desires": [],
+      "phrases": [
+        "my third coffee of the day"
+      ],
+      "objections": [],
+      "evidence": []
+    },
+    {
+      "ref": "p_fit",
+      "name": "Fitness Morning",
+      "description": "Gym-goer 22-32 who wants pre-workout caffeine without sugar",
+      "age_range": [
+        22,
+        32
+      ],
+      "genders": [
+        "all"
+      ],
+      "interests": [
+        "Physical fitness",
+        "Coffee"
+      ],
+      "pains": [
+        "Sugary RTD coffees"
+      ],
+      "desires": [],
+      "phrases": [],
+      "objections": [],
+      "evidence": []
+    }
+  ],
+  "competitors": [
+    {
+      "name": "Sleepy Owl",
+      "url": null,
+      "ad_notes": [],
+      "angles": [
+        "convenience",
+        "flavours"
+      ]
+    }
+  ],
+  "trends": [],
+  "recommended_angles": [
+    "café price vs ₹55/cup",
+    "10-second morning ritual",
+    "no sugar pre-workout"
+  ]
+}
