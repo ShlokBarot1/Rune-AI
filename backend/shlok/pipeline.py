@@ -10,6 +10,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from core import bus, llm
+from core.approvals import ask_human
 from core.schemas import (BudgetPlan, ClientBrief, CreativePackage, FixPrompt, LaunchResult, ResearchReport,
                           TargetingSpec)
 from core.state import RuneState, Step
@@ -35,13 +36,43 @@ def _weights_from_note(state: RuneState, note: str) -> dict[str, float] | None:
         return None
 
 
+FEE_WORDS = ("gst", "tax", "fee", "agency", "commission", "inclusive")
+
+
 def budget_step(state: RuneState) -> dict:
+    """S1 budget intake (clarify with the human) + S2 allocation."""
     brief = ClientBrief.model_validate(state["brief"])
     pkg = CreativePackage.model_validate(state["package"])
+    cid, b = brief.client_id, brief.budget
     note = (state.get("notes") or {}).get("budget")
+    prev = state.get("budget_plan") or {}
+    net_total = prev.get("net_total")
+    target_cpa = prev.get("target_cpa") or brief.kpi_targets.target_cpa
+
+    if not note:  # first pass: clear up what the proposal leaves ambiguous (questions must come first in the node)
+        if any(w in b.notes.lower() for w in FEE_WORDS):
+            a = ask_human(cid, "shlok.budget",
+                          f"The proposal mentions taxes/fees (\"{b.notes[:120]}\"). Is {b.total:,.0f} {b.currency} pure ad spend?",
+                          ["Yes, all of it is ad spend", "No, it includes 18% GST"])
+            net_total = round(b.total / 1.18, 2) if "18%" in a else None
+        price = brief.products[0].price if brief.products else None
+        if not target_cpa and brief.goal in ("sales", "leads") and price:
+            est = round(price * 0.35)
+            a = ask_human(cid, "shlok.budget",
+                          f"No target CPA was given. Use {est:,} {b.currency} (≈35% of the {price:,.0f} product price)?",
+                          [f"Use {est}", "No CPA target"])
+            target_cpa = est if a.startswith("Use") else None
+
+    effective = brief.model_copy(update={
+        "budget": b.model_copy(update={"total": net_total or b.total}),
+        "kpi_targets": brief.kpi_targets.model_copy(update={"target_cpa": target_cpa}),
+    })
     weights = _weights_from_note(state, note) if note else None
-    plan = budget.allocate(brief, pkg.blueprint, weights)
-    bus.log(brief.client_id, "shlok.budget", plan.rationale, adset_daily=plan.adset_daily)
+    plan = budget.allocate(effective, pkg.blueprint, weights)
+    plan.total, plan.target_cpa, plan.net_total = b.total, target_cpa, net_total
+    if net_total:
+        plan.rationale = f"Ad spend {net_total:,.0f} after 18% GST. " + plan.rationale
+    bus.log(cid, "shlok.budget", plan.rationale, adset_daily=plan.adset_daily)
     return {"budget_plan": plan.model_dump(mode="json")}
 
 

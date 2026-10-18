@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -50,6 +51,7 @@ def api(method: str, path: str, data: Optional[dict] = None, params: Optional[di
     raise MetaError(f"{method} {path}: rate limited")
 
 
+@lru_cache(maxsize=1)
 def account_facts() -> dict:
     return api("GET", account(), params={"fields": "currency,timezone_name,min_daily_budget,account_status"})
 

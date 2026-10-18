@@ -8,7 +8,6 @@ from pathlib import Path
 
 os.environ["RUNE_AUTO_APPROVE"] = "1"
 
-import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from core.schemas import (AuditReport, BudgetPlan, CampaignBlueprint, ClientBrief, CreativeFeedback,
@@ -17,12 +16,6 @@ from shlok import budget
 
 FIX = Path(__file__).resolve().parent.parent / "fixtures"
 load = lambda n: json.loads((FIX / f"{n}.json").read_text(encoding="utf-8"))
-
-
-@pytest.fixture(autouse=True)
-def tmp_db(tmp_path, monkeypatch):
-    monkeypatch.setenv("RUNE_DB", str(tmp_path / "test.db"))
-    monkeypatch.setattr("auditor.agent.llm_review", lambda state: [])  # no LLM in CI
 
 
 def test_fixtures_match_contracts():

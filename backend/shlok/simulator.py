@@ -29,7 +29,7 @@ def simulate(brief: ClientBrief, pkg: CreativePackage, plan: BudgetPlan, days: i
             for d in range(start_day, start_day + days):
                 spend = daily / len(ads) * rnd.uniform(0.8, 1.2)
                 impressions = int(spend / cpm * 1000)
-                freq = 1 + 0.3 * d
+                freq = 1 + (0.3 if fatigues else 0.1) * d
                 ctr = base_ctr * (0.9 ** max(0, d - 2) if fatigues else 1) * rnd.uniform(0.85, 1.15)
                 clicks = int(impressions * ctr)
                 conv = int(round(clicks * cvr * rnd.uniform(0.7, 1.3)))

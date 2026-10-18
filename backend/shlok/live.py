@@ -20,7 +20,7 @@ from core.schemas import (BudgetPlan, ClientBrief, CreativeFeedback, CreativePac
                           TargetingSpec, new_id, now)
 from core.state import RuneState
 
-from . import launch, meta, simulator
+from . import launch, meta, report, simulator
 
 MAX_SCALE_STEP = 0.20        # never raise an ad set more than 20% at once (keeps Meta learning intact)
 SCALE_COOLDOWN = timedelta(hours=48)
@@ -157,7 +157,9 @@ def monitor(brief: ClientBrief, stats: dict[str, dict]) -> list[Alert]:
 def optimize(client_id: str, brief: ClientBrief, plan: BudgetPlan, stats: dict[str, dict],
              alerts: list[Alert]) -> list[Action]:
     actions: list[Action] = []
-    paused = {a.ref for a in load_actions(client_id) if a.kind == "pause_ad" and a.status == "applied"}
+    history = load_actions(client_id)
+    paused = {a.ref for a in history if a.kind == "pause_ad" and a.status == "applied"}
+    waiting = {(a.kind, a.ref) for a in history if a.status == "proposed"}  # don't re-propose what's already pending
     for al in alerts:
         if al.kind in ("high_cpa", "low_ctr") and al.severity in ("critical", "warn") and al.ref not in paused:
             if al.kind == "low_ctr" or al.severity == "critical":
@@ -190,7 +192,7 @@ def optimize(client_id: str, brief: ClientBrief, plan: BudgetPlan, stats: dict[s
     for adset_ref in fatigued:
         actions.append(Action(kind="refresh_creatives", ref=adset_ref, risk="auto",
                               reason="Creatives fatiguing; asking Malav's agents for new variants."))
-    return actions
+    return [a for a in actions if (a.kind, a.ref) not in waiting]
 
 
 # ---------- S7 feedback ----------
@@ -219,6 +221,8 @@ def cycle(state: RuneState, source: Literal["simulated", "meta"] = "simulated", 
     pkg = CreativePackage.model_validate(state["package"])
     plan = BudgetPlan.model_validate(state["budget_plan"])
     result = LaunchResult.model_validate(state["launch"])
+    if plan.target_cpa:  # the CPA agreed at the budget gate wins over the raw brief
+        brief = brief.model_copy(update={"kpi_targets": brief.kpi_targets.model_copy(update={"target_cpa": plan.target_cpa})})
 
     rows = simulator.simulate(brief, pkg, plan, days=days, start_day=day) if source == "simulated" else fetch_meta(cid)
     save_insights(cid, rows)
@@ -257,8 +261,9 @@ def cycle(state: RuneState, source: Literal["simulated", "meta"] = "simulated", 
         bus.say(cid, "shlok.optimizer", "human" if a.risk == "approval" else "theater", "INFORM", a.model_dump(mode="json"))
     if update.get("launch") is None:
         update["launch"] = result.model_dump(mode="json")
-    return {"update": update, "alerts": [a.model_dump() for a in alerts],
-            "actions": [a.model_dump(mode="json") for a in actions], "stats": stats}
+    acts = [a.model_dump(mode="json") for a in actions]
+    return {"update": update, "alerts": [a.model_dump() for a in alerts], "actions": acts, "stats": stats,
+            "report": report.daily_report(brief, plan, stats, acts)}
 
 
 def apply_action(state: RuneState, action_id: str, approve: bool) -> dict:
