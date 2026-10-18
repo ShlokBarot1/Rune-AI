@@ -1,6 +1,10 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Crosshair, Minus, MessagesSquare, Plus, RotateCcw, Timer, Layers, X } from "lucide-react";
+import {
+  Activity, Bot, Brush, Building2, Clapperboard, Compass, Crosshair, Crown, FileBarChart, Megaphone, Handshake, Hammer, Layers,
+  Lightbulb, MessagesSquare, Minus, PackageCheck, Palette, PenTool, Plus, Repeat2, RotateCcw, Scale, ScanEye, ShieldCheck,
+  SlidersHorizontal, Swords, Target, Telescope, Timer, TrendingUp, UserRound, Users, Wallet, X, type LucideIcon,
+} from "lucide-react";
 import { money, msgText, useEvents, type BusMsg, type Json } from "@/lib/api";
 import { STAGES, stageStates, useRun } from "@/lib/run";
 import { Feed } from "@/components/rune/Pipeline";
@@ -48,6 +52,23 @@ const ORG: Agent[] = [
   { id: "core.suggestions", title: "Change reviewer", job: "Checks your change requests against policy, budget and the brief before agents apply them.", team: "auditor", parent: "dept.quality", kind: "agent" },
 ];
 const BY_ID = Object.fromEntries(ORG.map((a) => [a.id, a]));
+
+/** Every job gets its own mark. */
+const ICONS: Record<string, LucideIcon> = {
+  rune: Crown, human: UserRound,
+  "dept.client": Handshake, "dept.strategy": Lightbulb, "dept.creative": Palette, "dept.media": Megaphone,
+  "dept.performance": Activity, "dept.quality": ShieldCheck,
+  "malav.intake": Handshake, "malav.research": Telescope, "malav.research.audience": Users, "malav.research.competitors": Swords,
+  "malav.research.trends": TrendingUp, "malav.strategy": Compass, "malav.hooks": PenTool, "malav.creatives": Clapperboard,
+  "malav.planner": Layers, "malav.generator": Brush, "malav.qa": ScanEye, "malav.packager": PackageCheck, "malav.fixer": Repeat2,
+  "shlok.budget": Wallet, "shlok.targeting": Target, "shlok.launch": Hammer, "shlok.monitor": Activity,
+  "shlok.optimizer": SlidersHorizontal, "shlok.feedback": Repeat2, "shlok.report": FileBarChart,
+  auditor: ShieldCheck, "core.suggestions": Scale,
+};
+const Glyph = ({ a, size }: { a: Agent; size: number }) => {
+  const I = ICONS[a.id] ?? (a.kind === "dept" ? Building2 : Bot);
+  return <I size={size} strokeWidth={2.2} />;
+};
 const OWNER: Partial<Record<Team, string>> = { malav: "Malav's agents", shlok: "Shlok's agents", auditor: "Auditor" };
 const TEAM_COLOR: Record<Team, string> = { malav: "#d4f34a", shlok: "#9fb7ff", auditor: "#ffcf7a", human: "#ffffff", rune: "#d4f34a" };
 
@@ -108,7 +129,6 @@ function outcome(stage: string | undefined, v: Json): string | null {
   return null;
 }
 
-const initials = (a: Agent) => a.title.split(/[\s·&]+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 const dur = (s: number) => (s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`);
 
 /* ---------------- page ---------------- */
@@ -315,13 +335,13 @@ function Node({ a, b, st, count, on, line, onDown }: { a: Agent; b: Box; st: str
       {!head && (
         <span className="relative grid shrink-0 place-items-center rounded-full font-bold"
           style={{ width: av, height: av, fontSize: big ? 13 : a.kind === "sub" ? 10 : 12, background: a.kind === "client" ? "var(--ink)" : color, color: a.kind === "client" ? "#fff" : "#141a0a" }}>
-          {a.kind === "client" ? "YOU" : initials(a)}
+          <Glyph a={a} size={Math.round(av * 0.46)} />
           <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full" style={{ background: STATUS[st][0], border: `2px solid ${a.kind === "client" ? "#f4f6f9" : "var(--night-2)"}` }} />
         </span>
       )}
       <div className="min-w-0 flex-1 leading-tight">
         <div className="flex items-center gap-1.5">
-          {head && <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />}
+          {head && <span className="grid h-6 w-6 shrink-0 place-items-center rounded-lg" style={{ background: color, color: "#141a0a" }}><Glyph a={a} size={13} /></span>}
           <span className={`truncate font-semibold ${big ? "text-[15px]" : a.kind === "sub" ? "text-[12px]" : "text-[13px]"}`}>{a.title}</span>
           {count > 0 && !big && <span className="ml-auto shrink-0 rounded-full px-1.5 text-[10px] font-semibold" style={{ background: "rgba(255,255,255,.08)" }}>{count}</span>}
         </div>
@@ -345,14 +365,14 @@ function Profile({ a, msgs, v, st, org, onPick, onClose }: { a: Agent; msgs: Bus
   const color = TEAM_COLOR[a.team];
   const chip = (o: Agent) => (
     <button key={o.id} onClick={() => onPick(o.id)} className="inline-flex items-center gap-1.5 rounded-full py-1 pl-1 pr-2.5 text-[11.5px] font-semibold hover:brightness-125" style={{ background: "var(--night-3)", color: "var(--night-text)" }}>
-      <span className="grid h-5 w-5 place-items-center rounded-full text-[9px] font-bold" style={{ background: TEAM_COLOR[o.team], color: "#141a0a" }}>{o.kind === "client" ? "U" : initials(o)}</span>{o.title}
+      <span className="grid h-5 w-5 place-items-center rounded-full text-[9px] font-bold" style={{ background: TEAM_COLOR[o.team], color: "#141a0a" }}><Glyph a={o} size={11} /></span>{o.title}
     </button>
   );
   return (
     <aside className="absolute bottom-3 right-3 top-3 flex w-[min(460px,calc(100%-24px))] flex-col rounded-[22px] fade-in" onPointerDown={(e) => e.stopPropagation()}
       style={{ background: "rgba(15,18,23,.96)", border: "1px solid rgba(255,255,255,.08)", backdropFilter: "blur(16px)", boxShadow: "0 24px 60px rgba(0,0,0,.45)", cursor: "default" }}>
       <div className="flex items-start gap-3 p-5 pb-3">
-        <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl text-[14px] font-bold" style={{ background: a.kind === "client" ? "#fff" : color, color: "#141a0a" }}>{a.kind === "client" ? "YOU" : initials(a)}</span>
+        <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl text-[14px] font-bold" style={{ background: a.kind === "client" ? "#fff" : color, color: "#141a0a" }}><Glyph a={a} size={22} /></span>
         <div className="min-w-0 flex-1">
           <div className="text-[11px]" style={{ color: "var(--night-text-2)" }}>{a.kind === "dept" ? "Department" : a.kind === "client" ? "Client" : a.id}{OWNER[a.team] ? ` · ${OWNER[a.team]}` : ""}</div>
           <div className="text-[19px] font-semibold leading-tight">{a.title}</div>
