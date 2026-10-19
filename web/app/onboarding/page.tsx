@@ -5,6 +5,7 @@ import { ArrowRight, Globe, Sparkles, Wand2 } from "lucide-react";
 import { msgText, post, usePoll, useEvents, type Json } from "@/lib/api";
 import { BriefCard } from "@/components/rune/Views";
 import ApprovalDock from "@/components/rune/ApprovalDock";
+import BriefEditor from "@/components/rune/BriefEditor";
 
 const EXAMPLES = ["https://sleepyowl.co", "https://www.bluetokaicoffee.com", "https://www.thewholetruthfoods.com"];
 
@@ -24,6 +25,7 @@ export default function Onboarding() {
   const [url, setUrl] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
   useEffect(() => { setCid(new URLSearchParams(window.location.search).get("client")); }, []);
 
   const [snap, , reload] = usePoll<Json>(cid ? `/runs/${cid}` : null, 2000);
@@ -118,7 +120,9 @@ export default function Onboarding() {
           )}
         </section>
         <div className="flex flex-col gap-4">
-          <BriefCard b={liveBrief} live />
+          {editing && snap?.values?.brief
+            ? <BriefEditor cid={cid} brief={snap.values.brief} onCancel={() => setEditing(false)} onSaved={() => { setEditing(false); reload(); }} />
+            : <BriefCard b={liveBrief} live onEdit={pending?.gate === "intake" ? () => setEditing(true) : undefined} />}
           {snap?.values?.context_doc && (
             <details className="card">
               <summary className="title cursor-pointer">Product-marketing context (shared with every agent)</summary>

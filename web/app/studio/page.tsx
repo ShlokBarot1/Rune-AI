@@ -1,15 +1,13 @@
 "use client";
 import Link from "next/link";
-import { useState } from "react";
 import { Download, Film, ImageIcon, Images, ShieldCheck } from "lucide-react";
 import { fileUrl, type Json } from "@/lib/api";
-import { useRun } from "@/lib/run";
+import { canEdit, useRun } from "@/lib/run";
 import { CreativesBoard } from "@/components/rune/CreativesBoard";
 import ApprovalDock from "@/components/rune/ApprovalDock";
 
 export default function CreativeStudio() {
   const { runs, clientId, setClientId, snap, reload } = useRun(4000);
-  const [regen, setRegen] = useState<Json | null>(null);
   const v = snap?.values ?? {};
   const pkg = v.package;
   const pending = snap?.pending?.[0];
@@ -63,12 +61,8 @@ export default function CreativeStudio() {
             </div>
           </div>
 
-          {gateOpen && clientId && (
-            <ApprovalDock key={(regen?.creative_id ?? "") + pending.interrupt_id} item={pending} clientId={clientId}
-              onDone={() => { setRegen(null); reload(); }}
-              prefill={regen ? `Regenerate ${regen.creative_id}: ` : undefined} />
-          )}
-          <CreativesBoard pkg={pkg} onRegenerate={gateOpen ? setRegen : undefined} />
+          {gateOpen && clientId && <ApprovalDock key={pending.interrupt_id} item={pending} clientId={clientId} onDone={reload} />}
+          <CreativesBoard pkg={pkg} hooks={v.hooks ?? []} cid={clientId} editable={canEdit(snap)} atGate={gateOpen} onChanged={reload} />
         </>
       )}
     </div>

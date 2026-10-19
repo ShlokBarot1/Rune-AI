@@ -115,7 +115,8 @@ def audit(state: RuneState) -> AuditReport:
     for f in findings:
         scores[f.dimension] = max(0, scores.get(f.dimension, 100) - PENALTY[f.severity])
     mean = sum(scores.values()) / len(scores)
-    decision = ("FAIL" if any(f.severity == "blocker" for f in findings) or mean < 70
+    # one collapsed dimension (e.g. every creative failing QA) must not be averaged away by the others
+    decision = ("FAIL" if any(f.severity == "blocker" for f in findings) or mean < 70 or min(scores.values()) < 50
                 else "PASS_WITH_NOTES" if findings else "PASS")
 
     by_owner: dict[str, list[Finding]] = defaultdict(list)

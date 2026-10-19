@@ -1,13 +1,13 @@
 "use client";
 import { useState } from "react";
-import { ArrowUpRight, CheckCircle2, ExternalLink, Film, Globe, ImageIcon, Quote, Sparkles, Star, Target, TrendingUp, XCircle } from "lucide-react";
+import { ArrowUpRight, CheckCircle2, ExternalLink, Film, Globe, ImageIcon, Pencil, Quote, Sparkles, Star, Target, TrendingUp, XCircle } from "lucide-react";
 import { fileUrl, money, type Json } from "@/lib/api";
 
 const cta = (c?: string) => (c ? c.replace(/_/g, " ").toLowerCase().replace(/^./, (x) => x.toUpperCase()) : "Learn more");
 const Empty = ({ text }: { text: string }) => <div className="tile py-10 text-center text-[13px]" style={{ color: "var(--text-2)" }}>{text}</div>;
 
 /* ---------------- brief ---------------- */
-export function BriefCard({ b, live = false }: { b: Json | null; live?: boolean }) {
+export function BriefCard({ b, live = false, onEdit }: { b: Json | null; live?: boolean; onEdit?: () => void }) {
   if (!b) return <Empty text="The brief fills in here as the intake agent reads the site." />;
   const p0 = b.products?.[0];
   const budget = b.budget ?? {};
@@ -27,7 +27,10 @@ export function BriefCard({ b, live = false }: { b: Json | null; live?: boolean 
           <div className="page-title !text-[28px] mt-1">{b.business_name || "—"}</div>
           <div className="meta mt-1">{b.industry}</div>
         </div>
-        {b.brand?.logo && <img src={b.brand.logo} alt="" className="h-12 max-w-[120px] object-contain" />}
+        <div className="flex items-center gap-3">
+          {b.brand?.logo && <img src={b.brand.logo.startsWith("http") ? b.brand.logo : fileUrl(b.brand.logo)} alt="" className="h-12 max-w-[120px] object-contain" />}
+          {onEdit && <button className="btn btn-ghost !h-9" onClick={onEdit}><Pencil size={14} /> Edit brief</button>}
+        </div>
       </div>
       {!!b.brand?.colors?.length && (
         <div className="flex items-center gap-2">
@@ -139,41 +142,57 @@ export function ResearchView({ r }: { r: Json | null }) {
 /* ---------------- strategy ---------------- */
 export function StrategyView({ bp, negotiation }: { bp: Json | null; negotiation: React.ReactNode }) {
   if (!bp) return <Empty text="The strategy agent is designing the campaign and negotiating budget with shlok.budget." />;
+  const all: Json[] = bp.campaigns?.flatMap((c: Json) => c.adsets) ?? [];
+  const nAds = all.reduce((n, s) => n + (s.ads?.length ?? 0), 0);
   return (
-    <div className="grid gap-4 lg:grid-cols-[1.5fr_1fr] fade-in">
-      <section className="card">
-        <div className="label">Campaign architecture</div>
-        {bp.campaigns?.map((c: Json) => (
-          <div key={c.ref} className="mt-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[17px] font-semibold">{c.name}</span>
-              <span className="pill dark">{c.objective}</span><span className="pill lime">{c.funnel_stage}</span>
-            </div>
-            <div className="mt-3 flex flex-col gap-3 border-l-2 pl-4" style={{ borderColor: "var(--line)" }}>
-              {c.adsets?.map((s: Json) => (
-                <div key={s.ref} className="tile">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-[14px] font-semibold">{s.name}</div><span className="pill blue">{s.persona_ref}</span>
-                  </div>
-                  <div className="meta mt-1">{s.rationale}</div>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {s.ads?.map((a: Json) => (
-                      <span key={a.ref} className="pill" style={{ background: "#fff" }}>
-                        {a.format === "video" ? <Film size={11} /> : <ImageIcon size={11} />}{a.ref.replace(/^ad_/, "")} · {a.ratios?.join(" ")}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
+    <div className="flex flex-col gap-4 fade-in">
+      {bp.campaigns?.map((c: Json) => (
+        <section key={c.ref} className="rounded-[26px] p-5 text-white" style={{ background: "var(--ink)" }}>
+          <div className="label" style={{ color: "#9aa3b2" }}>Campaign</div>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <span className="text-[22px] font-semibold tracking-tight">{c.name}</span>
+            <span className="pill lime">{c.objective.replace("OUTCOME_", "")}</span><span className="pill dark">{c.funnel_stage} funnel</span>
           </div>
-        ))}
-        {bp.rationale && <p className="mt-4 text-[12.5px]" style={{ color: "var(--text-2)" }}>{bp.rationale}</p>}
-      </section>
-      <section className="card">
-        <div className="label">Negotiation with shlok.budget</div>
-        <div className="mt-3 flex flex-col gap-2">{negotiation}</div>
-      </section>
+          <div className="mt-4 grid grid-cols-3 gap-3 sm:max-w-md">
+            {[["Ad sets", c.adsets.length], ["Ads", nAds], ["Formats", Array.from(new Set(all.flatMap((s) => s.ads.map((a: Json) => a.format)))).join(" + ")]].map(([k, val]) => (
+              <div key={k as string}><div className="text-[11px]" style={{ color: "#9aa3b2" }}>{k}</div><div className="text-[20px] font-semibold capitalize">{val}</div></div>
+            ))}
+          </div>
+        </section>
+      ))}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+        <div className="grid gap-4 md:grid-cols-2">
+          {all.map((s: Json, i: number) => {
+            const [why, extra] = String(s.rationale ?? "").split(/Also test as hooks:/);
+            return (
+              <section key={s.ref} className="card flex flex-col gap-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="pill lime">Ad set {i + 1}</span><span className="pill blue">{s.persona_ref.replace(/^p_/, "")}</span>
+                </div>
+                <div>
+                  <div className="label">Angle</div>
+                  <div className="text-[17px] font-semibold leading-snug">{s.angle}</div>
+                </div>
+                {why?.trim() && <p className="text-[12.5px] leading-relaxed" style={{ color: "var(--text-2)" }}>{why.trim()}</p>}
+                {extra && <div className="flex flex-wrap items-center gap-1.5"><span className="label">Also tests</span>{extra.split(/[.;]/).map((x) => x.trim()).filter(Boolean).map((x) => <span key={x} className="pill">{x}</span>)}</div>}
+                <div className="mt-auto grid grid-cols-2 gap-2">
+                  {s.ads?.map((a: Json, j: number) => (
+                    <div key={a.ref} className="tile flex items-center gap-2 !p-2.5">
+                      <span className="grid h-8 w-8 place-items-center rounded-xl bg-white">{a.format === "video" ? <Film size={14} /> : <ImageIcon size={14} />}</span>
+                      <div className="min-w-0 leading-tight"><div className="whitespace-nowrap text-[12.5px] font-semibold capitalize">{a.format} {j + 1}</div><div className="meta whitespace-nowrap">{a.ratios?.join(" · ")}</div></div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+        <section className="card self-start">
+          <div className="label">Negotiation · strategy ⇄ budget</div>
+          <div className="mt-3 flex flex-col gap-2">{negotiation}</div>
+          {bp.rationale && <p className="mt-4 border-t pt-3 text-[12px] leading-relaxed" style={{ color: "var(--text-2)", borderColor: "var(--line)" }}>{bp.rationale}</p>}
+        </section>
+      </div>
     </div>
   );
 }
