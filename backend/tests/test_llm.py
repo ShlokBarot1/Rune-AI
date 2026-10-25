@@ -9,10 +9,12 @@ def test_chain_order_and_budget(monkeypatch):
     monkeypatch.setattr(claude, "enabled", lambda: True)
     monkeypatch.setenv("FREELLM_API_KEY", "freellmapi-test")
     monkeypatch.setenv("CLAUDE_DAILY_TOKENS", "100")
+    monkeypatch.setenv("RUNE_CLAUDE_FOR", "shlok,auditor,core")
 
     names = lambda agent: [n for n, _ in llm.providers("reason", agent)]
     assert names("shlok.budget") == ["claude", "freellm", "ollama"]
     assert names("malav.hooks") == ["freellm", "ollama"]
+    assert llm._caller() == __name__  # no agent= : the calling module decides the team
 
     # Claude over budget -> BudgetExceeded -> next provider answers
     claude._record(80, 30)

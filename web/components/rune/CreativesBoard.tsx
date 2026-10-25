@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import { Check, Download, ExternalLink, Film, ImageIcon, RefreshCw, Save, X } from "lucide-react";
+import { Check, Download, ExternalLink, Film, GalleryHorizontal, ImageIcon, RefreshCw, Save, X } from "lucide-react";
 import { fileUrl, type Json } from "@/lib/api";
 import { changeStage, editState, reopenNote } from "@/lib/run";
 import { QAChip } from "@/components/rune/Views";
@@ -16,9 +16,10 @@ function Thumb({ c, h, onOpen }: { c: Json; h: number; onOpen: () => void }) {
         style={{ height: h, aspectRatio: `${c.width}/${c.height}` }}>
         <img src={fileUrl(c.kind === "video" && c.thumbnail_path ? c.thumbnail_path : c.path)} alt={c.creative_id} className="h-full w-full object-cover" />
         {c.kind === "video" && <span className="absolute right-2 top-2 pill dark"><Film size={11} /> {c.duration_s}s</span>}
+        {c.kind === "carousel" && <span className="absolute right-2 top-2 pill dark"><GalleryHorizontal size={11} /> {c.cards?.length} cards</span>}
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="pill dark">{c.kind === "video" ? <Film size={11} /> : <ImageIcon size={11} />}{c.ratio}</span>
+        <span className="pill dark">{c.kind === "video" ? <Film size={11} /> : c.kind === "carousel" ? <GalleryHorizontal size={11} /> : <ImageIcon size={11} />}{c.ratio}</span>
         <QAChip qa={c.qa} />
         {c.parent_id && <span className="pill lime">v{c.version}</span>}
       </div>
@@ -44,6 +45,7 @@ export function CreativeModal({ c, pkg, hooks, cid, editable, atGate, onClose, o
     return () => window.removeEventListener("keydown", k);
   }, [onClose]);
   const hook = hooks[c.hook_id];
+  const own = c.model_used === "client-upload";
   const siblings = pkg.creatives.filter((x: Json) => x.ad_ref === c.ad_ref).length;
 
   const save = async () => {
@@ -68,13 +70,26 @@ export function CreativeModal({ c, pkg, hooks, cid, editable, atGate, onClose, o
         <div className="grid place-items-center p-5" style={{ background: "#0d0f13" }}>
           {c.kind === "video"
             ? <video src={fileUrl(c.path)} poster={c.thumbnail_path ? fileUrl(c.thumbnail_path) : undefined} controls autoPlay loop playsInline className="max-h-[82vh] w-auto rounded-xl" style={{ aspectRatio: `${c.width}/${c.height}` }} />
-            : <img src={fileUrl(c.path)} alt="" className="max-h-[82vh] w-auto rounded-xl" style={{ aspectRatio: `${c.width}/${c.height}` }} />}
+            : c.kind === "carousel"
+              ? <div className="flex max-w-full snap-x gap-3 overflow-x-auto pb-2 scroll-thin">{/* swipe like the feed */}
+                  {c.cards.map((card: Json, i: number) => (
+                    <div key={card.path} className="flex w-[260px] shrink-0 snap-start flex-col overflow-hidden rounded-xl bg-white">
+                      <img src={fileUrl(card.path)} alt="" style={{ aspectRatio: `${c.width}/${c.height}` }} className="w-full object-cover" />
+                      <div className="p-2.5 text-[#111]">
+                        <div className="truncate text-[13px] font-semibold">{card.headline}</div>
+                        <div className="meta truncate">{i === 0 ? "cover" : card.description}</div>
+                        <a href={card.link} target="_blank" className="meta block truncate underline">{card.link.replace(/^https?:\/\//, "")}</a>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              : <img src={fileUrl(c.path)} alt="" className="max-h-[82vh] w-auto rounded-xl" style={{ aspectRatio: `${c.width}/${c.height}` }} />}
         </div>
         <div className="flex flex-col gap-4 overflow-y-auto p-6">
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="label">{c.adset_ref} · {c.ad_ref}</div>
-              <div className="text-[18px] font-semibold">{c.kind === "video" ? "Video" : "Image"} · {c.ratio} · {c.width}×{c.height}</div>
+              <div className="text-[18px] font-semibold">{c.kind === "video" ? "Video" : c.kind === "carousel" ? `Carousel · ${c.cards?.length} cards` : "Image"} · {c.ratio} · {c.width}×{c.height}</div>
             </div>
             <button className="circle sm" onClick={onClose} aria-label="Close"><X size={15} /></button>
           </div>
@@ -108,7 +123,7 @@ export function CreativeModal({ c, pkg, hooks, cid, editable, atGate, onClose, o
           </div>
 
           <div className="tile flex flex-col gap-2">
-            <div className="flex items-center justify-between"><span className="label">Vision QA</span><QAChip qa={c.qa} /></div>
+            <div className="flex items-center justify-between"><span className="label">{own ? "File checks" : "Vision QA"}</span><QAChip qa={c.qa} /></div>
             <div className="flex flex-wrap gap-1.5">
               {Object.entries<boolean>(c.qa?.checks ?? {}).map(([k, v]) => (
                 <span key={k} className={`pill ${v ? "ok" : "bad"}`}>{v ? <Check size={11} /> : <X size={11} />}{k.replace(/_/g, " ")}</span>
@@ -118,7 +133,7 @@ export function CreativeModal({ c, pkg, hooks, cid, editable, atGate, onClose, o
           </div>
 
           <div className="flex flex-col gap-1 text-[12px]" style={{ color: "var(--text-2)" }}>
-            <div><b>Template</b> {c.template_id} · <b>Background</b> {c.model_used}</div>
+            <div>{own ? <b>Your upload, used as is</b> : <><b>Template</b> {c.template_id} · <b>Background</b> {c.model_used}</>}</div>
             <a className="inline-flex items-center gap-1 break-all hover:underline" href={c.landing_url} target="_blank"><ExternalLink size={11} />{c.landing_url}</a>
           </div>
 
@@ -129,10 +144,10 @@ export function CreativeModal({ c, pkg, hooks, cid, editable, atGate, onClose, o
                 <button className="btn btn-primary" disabled={!!busy} onClick={save}><Save size={14} /> {busy === "save" ? "Saving…" : "Save copy"}</button>
                 <a className="btn btn-ghost" href={fileUrl(c.path)} download><Download size={14} /> Download</a>
               </div>
-              <div className="flex gap-2">
+              {!own && <div className="flex gap-2">
                 <input className="input" placeholder="Regenerate with a note — e.g. “bigger product, warmer light”" value={note} onChange={(e) => setNote(e.target.value)} />
                 <button className="btn btn-lime" disabled={!!busy} onClick={regenerate}><RefreshCw size={14} /> Regenerate</button>
-              </div>
+              </div>}
             </div>
           ) : (
             <div className="meta border-t pt-3" style={{ borderColor: "var(--line)" }}>Editing opens whenever the run is waiting for you (not while agents are working or ads are live). <a className="underline" href={fileUrl(c.path)} download>Download asset</a></div>
@@ -160,7 +175,7 @@ export function CreativesBoard({ pkg, compact = false, hooks = [], cid = null, e
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
         <div className="seg">{["all", ...ratios].map((r) => <button key={r} className={ratio === r ? "on" : ""} onClick={() => setRatio(r)}>{r === "all" ? "All ratios" : r}</button>)}</div>
-        <div className="seg">{["all", "image", "video"].map((k) => <button key={k} className={kind === k ? "on" : ""} onClick={() => setKind(k)}>{k === "all" ? "All" : k === "image" ? "Images" : "Videos"}</button>)}</div>
+        <div className="seg">{["all", "image", "carousel", "video"].map((k) => <button key={k} className={kind === k ? "on" : ""} onClick={() => setKind(k)}>{({ all: "All", image: "Images", carousel: "Carousels", video: "Videos" } as Record<string, string>)[k]}</button>)}</div>
         <span className="meta ml-auto">Click any creative to see its hook, copy and QA{editable ? " — and edit it" : ""}</span>
       </div>
       {adsets.map((s) => {

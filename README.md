@@ -22,6 +22,45 @@ cd web && npm install && npm run dev                                  # dashboar
 
 With `META_DRY_RUN=1` nothing is sent to Meta. On a live client, Live Performance → "Simulate next 7 days" feeds the optimizer simulated data.
 
+### What the ads show (any kind of client)
+
+Intake decides per campaign (`ClientBrief.creative_focus`), from the website and notes, and asks once when unsure:
+
+| Focus | For | Ads |
+|---|---|---|
+| `product` | D2C, catalogs | the real product photo on a generated scene; each ad set features its own product |
+| `range` | category / range campaigns ("our new skincare line") | line-ups of up to 4 products + benefit tags, and carousels with a card per product (own name, facts, link) |
+| `photos` | services, local businesses, apps, events | the client's own photos as the image, nothing generated |
+| `brand` | pure awareness, causes | generated lifestyle scenes, no product |
+
+For a range, intake reads the brand's listing and product pages (including shop subdomains) for names, facts, prices and packshots, and asks for photos it can't find. Prices only come from a product's own page, never from search snippets.
+
+### Real-world campaign shapes
+
+| Need | How it works | Where |
+|---|---|---|
+| **Local businesses** | Locations on the brief (address, radius, pincodes) are geocoded (OpenStreetMap) and targeted as radius / postcode / city around each place; copy speaks to the neighbourhood. Special ad categories get Meta's 25 km minimum and no postcodes | `ClientBrief.locations`, `shlok/targeting.py` |
+| **Offers & sales** | `ClientBrief.offer` (deal, was/now, coupon, last day) is drawn on the ads, written into the copy, and its ads pause by themselves after the last day | `media.offer_html`, `live.offer_ended` |
+| **Festivals & sale days** | A per-country calendar (Diwali, Eid, Black Friday, Mother's Day…) feeds research, copy and **budget boosts**: the testing reserve is spent on the peak days as Meta budget schedules, so the total never moves | `core/calendar.py`, `budget.peak_boosts` |
+| **Audiences** | Retargeting ad set (site visitors + Page/Instagram engagers) running the best ad set's creatives; buyers and the uploaded customer list excluded from prospecting; a lookalike ad set. Customer CSVs are SHA-256 hashed before they leave the server | `shlok/audiences.py` (needs `META_PIXEL_ID`, `META_PAGE_ID`, optional `META_IG_ACCOUNT_ID`) |
+| **Account history** | A brand that advertised before: its past winners and CPA feed research and the CPA target | `shlok/history.py` |
+| **Languages** | Ad sets take turns over `brief.languages`; copy, on-image labels, Google web fonts per script (Devanagari, Tamil, Arabic RTL…), voiceover voice, research queries and Meta locales follow | `core/langs.py` |
+| **Catalogs** | Shopify / WooCommerce product APIs read in seconds (exact prices + currency); with 4+ priced products an Advantage+ catalog campaign is added (items uploaded with `items_batch`, a product set, a dynamic ad) | `lineup.shop_feed`, `shlok/catalog.py` (`META_BUSINESS_ID` or `META_CATALOG_ID`) |
+| **Restricted categories** | Alcohol, gambling, crypto, finance, pharma, weight loss, dating, politics, jobs, housing, tobacco… detected from the brief: age floors, copy rules, Meta special categories, and go-live blocked until authorisation is confirmed (forbidden ones always blocked) | `core/compliance.py` |
+| **Money safety** | Each Meta campaign gets a hard `spend_cap`; the monitor pauses everything at 95% of budget, alerts on overspend days and CPA spikes, and turns Meta disapprovals into a one-click rewrite + relaunch | `live.safety` |
+| **Agency mode** | `RUNE_AUTH=1`: sign-in, roles (owner / strategist / client), per-campaign access, a client portal (`/portal`), white-label branding (`/settings`), weekly HTML reports and expiring share links | `core/auth.py`, `agency.py` |
+
+### Client's own creatives (no generative media)
+
+On **New campaign**, pick **I have my own** and add the client's finished images/videos (PNG, JPG, WEBP, MP4, MOV, WEBM), optionally with a headline and primary text per file. The run then:
+
+- skips the deliverables question (the uploads are the deliverables) and plans exactly one ad per file, in that file's own ratio
+- never calls an image/video model, product cutout or voiceover; files are only checked (size, shape, video length, cover frame) and, when their shape isn't a Meta ratio, letterboxed onto the nearest one (never cropped)
+- uses the client's copy where given, otherwise the hooks agent writes it; both stay editable at the hooks and creatives gates
+- in the live loop, asks the client for fresh files instead of generating them: **Live Performance → Add your own creatives** builds them paused, audits them, and launches after you approve
+
+API: `POST /malav/runs/{cid}/upload?filename=x.mp4` (raw file body) returns a path; pass `{"intake": {"website": ..., "creatives": [{"path": ..., "headline": ...}]}}` to `POST /runs` (with the same `client_id`). While live: `POST /malav/runs/{cid}/creatives {"adset_ref", "creatives"}`.
+
 FreeLLMAPI runs separately (Docker): see https://github.com/tashfeenahmed/freellmapi. Put its unified key in `backend/.env`.
 
 ## Layout

@@ -162,12 +162,19 @@ export default function AgencyTheater() {
     walk(id);
     return [...all.values()].sort((a, b) => a.seq - b.seq);
   }, [msgs, own, org]);
+  // "working" follows the run itself, not message timing, so cards don't flicker between messages:
+  // the last agent to speak while the run is going, plus its managers up to the director
+  const running = !!snap?.running;
+  const active = running ? [...msgs].reverse().find((m) => ids.has(m.sender) && m.sender !== "human")?.sender ?? null : null;
+  const busy = useMemo(() => {
+    const s = new Set<string>(running ? ["rune"] : []);
+    for (let x: string | undefined = active ?? undefined; x; x = org.find((a) => a.id === x)?.parent) s.add(x);
+    return s;
+  }, [running, active, org]);
   const status = (id: string) => {
-    const ms = tree(id);
-    const last = ms[ms.length - 1];
-    if (last && now - new Date(last.created_at).getTime() < 20000) return "working";
+    if (busy.has(id)) return "working";
     if (id === "human" && snap?.pending?.length) return "waiting";
-    return ms.length ? "done" : "idle";
+    return tree(id).length ? "done" : "idle";
   };
 
   // fit the chart to the canvas once per campaign
@@ -271,7 +278,7 @@ export default function AgencyTheater() {
               const a = box(p.a), b = box(p.b);
               const ax = a.x + a.w, ay = a.y + a.h / 2, bx = b.x + b.w, by = b.y + b.h / 2;
               const bend = 50 + Math.abs(ay - by) * 0.12 + Math.abs(ax - bx) * 0.06;
-              const hot = now - p.last < 20000;
+              const hot = !!active && (p.a === active || p.b === active) && now - p.last < 60000;
               return (
                 <g key={p.a + p.b}>
                   <path d={`M${ax},${ay} C${ax + bend},${ay} ${bx + bend},${by} ${bx},${by}`} fill="none" stroke={hot ? "#d4f34a" : "rgba(212,243,74,.5)"}
@@ -282,7 +289,7 @@ export default function AgencyTheater() {
             })}
           </svg>
           {org.map((a) => (
-            <Node key={a.id} a={a} b={box(a.id)} st={status(a.id)} count={tree(a.id).length} on={sel === a.id}
+            <Node key={a.id} a={a} b={box(a.id)} st={status(a.id)} pulse={a.id === active} count={tree(a.id).length} on={sel === a.id}
               line={a.id === "rune" ? (v.brief?.business_name ? `Running ${v.brief.business_name} · ${done}/${STAGES.length} stages` : "No campaign yet") : lastLine(tree(a.id))}
               onDown={(e) => down(e, a.id)} />
           ))}
@@ -320,14 +327,14 @@ function lastLine(ms: BusMsg[]): string {
 
 const STATUS: Record<string, [string, string]> = { working: ["#d4f34a", "working now"], waiting: ["#ffcf7a", "needs you"], done: ["#5fd38d", "worked on this campaign"], idle: ["#4a5263", "not needed yet"] };
 
-function Node({ a, b, st, count, on, line, onDown }: { a: Agent; b: Box; st: string; count: number; on: boolean; line: string; onDown: (e: React.PointerEvent) => void }) {
+function Node({ a, b, st, pulse, count, on, line, onDown }: { a: Agent; b: Box; st: string; pulse: boolean; count: number; on: boolean; line: string; onDown: (e: React.PointerEvent) => void }) {
   const color = TEAM_COLOR[a.team];
   const big = a.kind === "root" || a.kind === "client";
   const head = a.kind === "dept";
   const idle = st === "idle" && !head && !big;
   const av = big ? 48 : a.kind === "sub" ? 28 : 36;
   return (
-    <div onPointerDown={onDown} className={`absolute flex cursor-pointer items-center gap-3 rounded-[18px] px-3 ${st === "working" ? "live-pulse" : ""}`}
+    <div onPointerDown={onDown} className={`absolute flex cursor-pointer items-center gap-3 rounded-[18px] px-3 ${pulse ? "live-pulse" : ""}`}
       style={{ left: b.x, top: b.y, width: b.w, height: b.h, opacity: idle ? 0.55 : 1,
         background: a.kind === "root" ? "linear-gradient(135deg,#26331a,#141a22)" : head ? "rgba(255,255,255,.07)" : a.kind === "client" ? "#f4f6f9" : "var(--night-2)",
         border: `1px solid ${on ? color : head ? "rgba(255,255,255,.12)" : "rgba(255,255,255,.06)"}`,

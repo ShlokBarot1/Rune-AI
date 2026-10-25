@@ -1,9 +1,9 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { ArrowUpRight, Images, Plus, ShieldCheck } from "lucide-react";
-import { money, msgText, useEvents, type Json } from "@/lib/api";
-import { STAGES, canEdit, currentStage, stageStates, useRun, type StageId } from "@/lib/run";
+import { ArrowUpRight, Images, Play, Plus, ShieldCheck, Square } from "lucide-react";
+import { money, msgText, useEvents, type BusMsg, type Json } from "@/lib/api";
+import { STAGES, canEdit, continueRun, currentStage, stageStates, stopRun, useRun, type StageId } from "@/lib/run";
 import { PipelineRail, Theater } from "@/components/rune/Pipeline";
 import { AuditSummary, BriefCard, HooksView, ResearchView, StrategyView } from "@/components/rune/Views";
 import { CreativesBoard } from "@/components/rune/CreativesBoard";
@@ -35,12 +35,12 @@ function ShlokStage({ id, v, cid, gate, editable, reload }: { id: StageId; v: Js
 /** While generation runs: planned vs finished assets, each QA verdict as it lands (from the agent bus). */
 function CreativesProgress({ msgs }: { msgs: Json[] }) {
   const logs = msgs.filter((m) => m.type === "LOG");
-  const plan = [...logs].reverse().find((m) => m.sender === "malav.planner" && String(m.payload?.text).startsWith("Plan:"));
-  const total = Number(String(plan?.payload?.text ?? "").match(/Plan: (\d+) assets/)?.[1] ?? 0);
+  const plan = [...logs].reverse().find((m) => m.sender === "malav.planner" && /^(Plan:|Making \d+ files)/.test(String(m.payload?.text)));
+  const total = Number(String(plan?.payload?.text ?? "").match(/(?:Plan: |Making )(\d+)/)?.[1] ?? 0);
   const since = plan ? plan.seq : 0;
   const results = logs.filter((m) => m.seq > since && m.sender === "malav.qa" && /: (pass|NEEDS HUMAN)/.test(m.payload?.text ?? ""));
   const steps = logs.filter((m) => m.seq > since && m.sender === "malav.generator");
-  const step = steps[steps.length - 1]?.payload?.text;
+  const step = steps.length ? msgText(steps[steps.length - 1] as BusMsg) : undefined;
   const done = results.length;
   return (
     <section className="card fade-in">
@@ -81,6 +81,7 @@ export default function MissionControl() {
   const { runs, clientId, setClientId, snap, reload } = useRun();
   const [picked, setPicked] = useState<StageId | null>(null);
   const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
   const msgs = useEvents(clientId, 400);
   const v = snap?.values ?? {};
   const states = stageStates(snap);
@@ -98,12 +99,12 @@ export default function MissionControl() {
 
   const pkg = v.package, pending = snap?.pending?.[0], editable = canEdit(snap);
   const done = STAGES.filter((s) => states[s.id] === "done").length;
-  const nego = msgs.filter((m) => (m.sender === "malav.strategy" && m.recipient === "shlok.budget") || (m.sender === "shlok.budget" && m.recipient === "malav.strategy"));
-  const negotiation = nego.length ? nego.map((m) => (
-    <div key={m.seq} className={`bubble ${m.sender.startsWith("malav") ? "light-right" : "light-left"}`}>
-      <div className="meta mb-0.5" style={m.sender.startsWith("malav") ? { color: "#9aa3b2" } : undefined}>{m.sender}</div>{msgText(m)}
-    </div>
-  )) : <div className="meta">No negotiation recorded yet.</div>;
+  const stalled = !snap?.running && !pending && !!snap?.next?.length && !snap.next[0].endsWith("__gate");
+  const act = async (fn: (cid: string) => Promise<unknown>) => {
+    if (!clientId) return;
+    setBusy(true);
+    try { await fn(clientId); } finally { setBusy(false); reload(); }
+  };
 
   return (
     <div className="flex flex-col gap-5">
@@ -132,6 +133,17 @@ export default function MissionControl() {
       </div>
 
       <div className="card !p-3"><PipelineRail states={states} selected={stage} onSelect={setPicked} /></div>
+      {clientId && (snap?.running || stalled) && (
+        <div className="card flex flex-wrap items-center justify-between gap-3 !py-3">
+          <span className="text-[13px]">
+            {snap?.running ? <><b>{STAGES.find((s) => s.id === cur)?.label}</b> is running.</>
+              : <><b>{STAGES.find((s) => s.id === cur)?.label}</b> is stopped. Continue reruns it from the start.</>}
+          </span>
+          {snap?.running
+            ? <button className="btn btn-ghost" disabled={busy} onClick={() => act(stopRun)}><Square size={14} /> {busy ? "Stopping…" : "Stop stage"}</button>
+            : <button className="btn btn-lime" disabled={busy} onClick={() => act(continueRun)}><Play size={14} /> Continue</button>}
+        </div>
+      )}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="flex min-w-0 flex-col gap-4">
@@ -140,7 +152,7 @@ export default function MissionControl() {
             ? <BriefEditor cid={clientId} brief={v.brief} atGate={pending?.gate === "intake"} onCancel={() => setEditing(false)} onSaved={() => { setEditing(false); reload(); }} />
             : <BriefCard b={v.brief ?? null} onEdit={editable ? () => setEditing(true) : undefined} />)}
           {stage === "research" && <ResearchView r={v.research ?? null} />}
-          {stage === "strategy" && <StrategyView bp={v.blueprint ?? null} negotiation={negotiation} />}
+          {stage === "strategy" && <StrategyView bp={v.blueprint ?? null} />}
           {stage === "hooks" && <HooksView hooks={v.hooks ?? null} bp={v.blueprint ?? null} brand={v.brief?.business_name ?? "Brand"} />}
           {stage === "creatives" && (pkg
             ? <CreativesBoard pkg={pkg} compact hooks={v.hooks ?? []} cid={clientId} editable={editable} atGate={pending?.gate === "creatives"} onChanged={reload} />

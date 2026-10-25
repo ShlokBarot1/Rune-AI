@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Check, Hand, MessageSquare, Rocket, RotateCcw, Send } from "lucide-react";
 import Artifact, { AuditView } from "@/components/Artifacts";
 import Avatar from "@/components/Avatar";
+import { DateRange } from "@/components/rune/ApprovalDock";
 import { GATE_TITLES, post, type Json } from "@/lib/api";
 
 const OWNER: Record<string, string> = {
@@ -49,6 +50,7 @@ export default function DecisionCard({ item, onDone }: { item: Json; onDone: () 
               <button key={o} disabled={busy} className={`btn ${i === 0 ? "btn-lime" : "btn-ghost"} !h-9`} onClick={() => send({ answer: o })}>{o}</button>
             ))}
           </div>
+          <DateRange suggested={item.options?.[0]} busy={busy} onSend={(a) => send({ answer: a })} />
           <div className="flex gap-2">
             <input className="input" placeholder="Or type your own answer…" value={comment} onChange={(e) => setComment(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && comment && send({ answer: comment })} />

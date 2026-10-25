@@ -43,6 +43,17 @@ def search(query: str, n: int = 5) -> list[dict]:
     return []
 
 
+def image_search(query: str, n: int = 8) -> list[str]:
+    """Image URLs from Tavily image search; [] without a key. `site:pinterest.com` returns pins (i.pinimg.com)."""
+    key = os.getenv("TAVILY_API_KEY")
+    if not key:
+        return []
+    r = httpx.post("https://api.tavily.com/search", timeout=40, headers={"Authorization": f"Bearer {key}"},
+                   json={"query": query, "max_results": n, "include_images": True})
+    r.raise_for_status()
+    return [i if isinstance(i, str) else i["url"] for i in r.json().get("images", [])]
+
+
 def ad_library(terms: str, countries: list[str], limit: int = 8) -> list[dict]:
     """Meta Ad Library (ads_archive). Commercial ads are only returned for EU delivery, hence EU countries."""
     v = os.getenv("META_API_VERSION", "v23.0")
@@ -82,3 +93,13 @@ def page_colors(url: str, top: int = 6) -> list[str]:
             del counts[h]
     theme = [_norm(t) for t in _THEME.findall(html)]
     return list(dict.fromkeys(theme + [h for h, _ in counts.most_common(top)]))[:top]
+
+
+def geocode(query: str) -> tuple[float, float] | None:
+    """(lat, lng) for an address via OpenStreetMap Nominatim (free; policy: 1 request/s, a real User-Agent).
+    None when not found."""
+    r = httpx.get("https://nominatim.openstreetmap.org/search", params={"q": query, "format": "json", "limit": 1},
+                  headers={"User-Agent": "RuneAI/1.0 (ad targeting; contact via the site)"}, timeout=20)
+    r.raise_for_status()
+    hits = r.json()
+    return (float(hits[0]["lat"]), float(hits[0]["lon"])) if hits else None

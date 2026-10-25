@@ -22,7 +22,8 @@ def audit_node(state: RuneState) -> Command:
     rnd = state.get("audit_round", 0) + 1
     report = audit(state)
     update = {"audit": report.model_dump(mode="json"), "audit_round": rnd}
-    if report.decision == "FAIL" and rnd < MAX_AUDIT_ROUNDS:
+    fixable = any(p.owner in ("malav", "shlok") for p in report.fix_prompts)  # else only the human can fix it
+    if report.decision == "FAIL" and rnd < MAX_AUDIT_ROUNDS and fixable:
         return Command(goto="fix", update=update)
     return Command(goto="go_live", update=update)
 

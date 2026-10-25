@@ -60,8 +60,14 @@ def budget_step(state: RuneState) -> dict:
                           f"The proposal mentions taxes/fees (\"{b.notes[:120]}\"). Is {b.total:,.0f} {b.currency} pure ad spend?",
                           ["Yes, all of it is ad spend", "No, it includes 18% GST"])
             net_total = round(b.total / 1.18, 2) if "18%" in a else None
-        price = brief.products[0].price if brief.products else None
-        if not target_cpa and brief.goal in ("sales", "leads") and price:
+        price = brief.products[0].price_in(b.currency) if brief.products else None
+        past = ((state.get("research") or {}).get("benchmarks") or {}).get("cpa")
+        if not target_cpa and brief.goal in ("sales", "leads") and past:  # the account's own history beats a rule
+            a = ask_human(cid, "shlok.budget",
+                          f"Your ad account's past cost per result is {past:,.0f} {b.currency}. Use it as the target CPA?",
+                          [f"Use {round(past)}", "No CPA target"])
+            target_cpa = round(past) if a.startswith("Use") else None
+        elif not target_cpa and brief.goal in ("sales", "leads") and price:
             est = round(price * 0.35)
             a = ask_human(cid, "shlok.budget",
                           f"No target CPA was given. Use {est:,} {b.currency} (≈35% of the {price:,.0f} product price)?",
@@ -73,7 +79,15 @@ def budget_step(state: RuneState) -> dict:
         "kpi_targets": brief.kpi_targets.model_copy(update={"target_cpa": target_cpa}),
     })
     weights = _weights_from_note(state, note) if note else None
-    plan = budget.allocate(effective, pkg.blueprint, weights)
+    try:
+        plan = budget.allocate(effective, pkg.blueprint, weights)
+    except ValueError as e:
+        if not weights:
+            raise
+        # e.g. an audit note to "consolidate" zeroes an ad set the blueprint still has: never crash the run on it
+        bus.log(cid, "shlok.budget", f"Couldn't apply that budget change ({e}). Keeping an equal split; dropping an "
+                                     "ad set is a strategy change, so request it at the Strategy step")
+        plan = budget.allocate(effective, pkg.blueprint)
     plan.total, plan.target_cpa, plan.net_total = b.total, target_cpa, net_total
     if net_total:
         plan.rationale = f"Ad spend {net_total:,.0f} after 18% GST. " + plan.rationale

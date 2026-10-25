@@ -26,6 +26,11 @@ def test_api_flow(tmp_path, monkeypatch):
         if not pending:
             break
         gates.append(pending[0].get("gate") or pending[0]["type"])
+        if gates[-1] == "intake" and gates.count("intake") == 1:  # a human edit of the brief at its gate
+            brief = c.get(f"/runs/{cid}").json()["values"]["brief"] | {"audience_notes": "edited by hand"}
+            r = c.post(f"/malav/runs/{cid}/edit", json={"key": "brief", "value": brief})
+            assert r.status_code == 200, r.text
+            assert c.get(f"/runs/{cid}").json()["values"]["brief"]["audience_notes"] == "edited by hand"
         assert c.post(f"/runs/{cid}/resume", json={"action": "approve"}).status_code == 200
     assert gates[-1] == "go_live" and "budget" in gates and "targeting" in gates
     assert c.get("/runs").json()[0]["live"] is True

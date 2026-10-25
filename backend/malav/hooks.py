@@ -11,12 +11,13 @@ that the creatives step reads. `Hook.model_validate` ignores the extras, so the 
 from __future__ import annotations
 
 import re
+from datetime import date
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from pydantic import BaseModel
 
-from core import bus, llm, skills
+from core import bus, calendar, compliance, langs, llm, skills
 from core.schemas import CTA, AdCopy, AdSetPlan, CampaignBlueprint, ClientBrief, Hook, Persona, ResearchReport
 from core.state import RuneState
 from malav.common import demo_mode, fixture
@@ -130,11 +131,78 @@ def fit_copy(c: AdCopy, hook: str, brief: ClientBrief) -> AdCopy:
                   cta=c.cta or GOAL_CTA[brief.goal])
 
 
+REWRITE_SYSTEM = """You fix Meta ad copy that an auditor flagged. Rewrite only what the issues require, keep the
+hook, offer and voice. headline <= 40 chars, description <= 30, primary_text <= 250 with the hook in the first 125.
+Policy: never assert or imply the viewer's personal attributes (health, emotions, finances, body, religion...),
+no guarantees or unrealistic claims, no unsourced claims about competitors. Never use the brand's don't-words."""
+
+
+def rewrite_copy(cid: str, brief: ClientBrief, copy: AdCopy, issues: list[str]) -> AdCopy:
+    """Audit copy findings -> corrected copy (text only: the image stays). The old copy if no model answers."""
+    try:
+        new = llm.structured("creative", REWRITE_SYSTEM,
+                             f"Brand tone: {brief.brand.tone}; don't-words {brief.brand.dont_words}\n"
+                             f"Current copy: {copy.model_dump_json()}\nIssues:\n" + "\n".join(f"- {i}" for i in issues),
+                             AdCopy)
+        new = fit_copy(new, new.primary_text[:60], brief)
+        if left := policy_issues(f"{new.primary_text} {new.headline} {new.description}", brief):
+            raise ValueError("; ".join(left))
+        return new
+    except Exception as e:
+        bus.log(cid, AGENT, f"Couldn't rewrite the copy ({e.__class__.__name__}); it stays for you to edit")
+        return copy
+
+
+FOCUS = {
+    "brand": "Campaign focus: the brand / category as a whole, not one product. Don't sell a single SKU or price; "
+             "scenes show the lifestyle or moment, with no product in them.\n",
+    "photos": "Visual: the client's own photos (their place, team, work or app) are the ad image, so write copy that "
+              "fits a real photo of the business; the scene field is not used.\n",
+    "range": "Campaign focus: the RANGE ({names}). Sell the category and the choice: why this range (its key benefit, "
+             "variety, price, trust, the brand's proof points), with products named as examples. Ads show several products "
+             "side by side plus benefit tags; carousels add a card per product, so the copy introduces the range, not "
+             "one SKU.\n",
+    "product": "",
+}
+
+
+def situation(brief: ClientBrief, adset: AdSetPlan) -> str:
+    """What else the copy has to carry: the offer, the moments in the flight, the neighbourhood, the language,
+    the audience, and the category's ad rules."""
+    out = ""
+    if (o := brief.offer) and not (o.ends and o.ends < date.today()):  # an offer that's over is never written again
+        bits = [o.headline] + ([f"code {o.code}"] if o.code else []) + (
+            [f"ends {o.ends:%d %b}"] if o.ends else []) + ([o.terms] if o.terms else [])
+        out += (f"Offer (lead with it, quote it exactly, never invent another): {'; '.join(bits)}. Put the code and "
+                f"the end date in the primary text.\n")
+    if moments := calendar.events_in(brief.budget.start, brief.budget.end, brief.geo):
+        out += f"Moments in this flight (use one where it fits naturally): {calendar.describe(moments[:4])}\n"
+    if brief.locations:
+        out += (f"Local business at {', '.join(l.name + (f' ({l.city})' if l.city else '') for l in brief.locations[:5])}: "
+                f"speak to people nearby (the area, 'near you', how close it is), not the whole country.\n")
+    language = adset.language or (brief.languages[0] if brief.languages else "en")
+    if language != "en":
+        out += (f"Write every text (hooks, headline, primary text, on-screen text, voiceover) in {langs.name(language)}, "
+                f"in its own script (e.g. Devanagari for Hindi), the way people there actually speak it; everyday English "
+                f"words people use are fine. Only if the client asked for Hinglish / romanised text, write it in Latin "
+                f"script.\n")
+    if adset.audience == "retargeting":
+        out += "Audience: people who already visited or engaged: remind, reassure, give a reason to come back now.\n"
+    if rules := compliance.copy_rules(brief):
+        out += f"Category rules (Meta policy): {rules}\n"
+    return out
+
+
 def _brief_bits(brief: ClientBrief, persona: Optional[Persona], adset: AdSetPlan, note: str = "") -> str:
-    p = brief.products[0]
-    s = (f"Product: {p.name}, price {p.price} {brief.budget.currency}, USPs {p.usp}\n"
+    p = brief.product(adset.product)
+    others = [q.name for q in brief.products if q.name != p.name]
+    s = (f"Business: {brief.business_name} ({brief.industry})\n"
+         f"{'Featured product' if adset.product else 'Product / offer'}: {p.name}, price {p.price} {brief.budget.currency}, "
+         f"USPs {p.usp}" + (f"; the brand also sells {', '.join(others[:5])}" if others else "") + "\n"
          f"Brand tone: {brief.brand.tone}; do-words {brief.brand.do_words}; don't-words {brief.brand.dont_words}\n"
          f"Ad set: {adset.name}; angle: {adset.angle}; notes: {adset.rationale}\n")
+    s += FOCUS[brief.creative_focus].replace("{names}", ", ".join(q.name for q in brief.products[:8]))
+    s += situation(brief, adset)
     if persona:
         s += (f"Persona {persona.name}: {persona.description}; pains {persona.pains}; desires {persona.desires}; "
               f"objections {persona.objections}; their words {persona.phrases}\n")
@@ -142,12 +210,14 @@ def _brief_bits(brief: ClientBrief, persona: Optional[Persona], adset: AdSetPlan
 
 
 def _fallback_hooks(brief: ClientBrief, adset: AdSetPlan, n: int) -> list[_Gen]:
-    p = brief.products[0]
+    p = brief.product(adset.product)
+    from malav.lineup import _PACK
+    facts = [u for u in p.usp if not _PACK.search(u)]  # sizes and counts aren't hooks
     lines = [f"{adset.angle[:1].upper()}{adset.angle[1:]}. Meet {p.name}."]
-    lines += [f"{u}." for u in p.usp]
-    if p.price:
+    lines += [f"{u}." for u in facts]
+    if p.price and brief.creative_focus == "product":
         lines.append(f"{p.name} for {brief.budget.currency} {p.price:,.0f}.")
-    lines += [f"{p.name}: {u.lower()}." for u in p.usp]
+    lines += [f"{p.name}: {u.lower()}." for u in facts]
     while len(lines) < n:
         lines.append(f"Try {p.name} today ({len(lines) + 1}).")
     return [_Gen(text=t, framework="fallback") for t in lines]
@@ -160,9 +230,9 @@ def hooks_for_adset(cid: str, brief: ClientBrief, persona: Optional[Persona], ad
     try:
         gen = llm.structured("creative", skills.with_skills(GEN_SYSTEM, ["ad-creative", "marketing-psychology"], context_doc),
                              bits, _Hooks).hooks
-        bus.log(cid, AGENT, f"{adset.ref}: generated {len(gen)} hooks (skills: ad-creative, marketing-psychology)")
+        bus.log(cid, AGENT, f"{adset.name}: wrote {len(gen)} opening lines")
     except Exception as e:
-        bus.log(cid, AGENT, f"{adset.ref}: hook model unavailable ({e.__class__.__name__}); using brief-based hooks")
+        bus.log(cid, AGENT, f"{adset.name}: hook model unavailable ({e.__class__.__name__}); using brief-based hooks")
         gen = []
     safe = []
     for g in gen:
@@ -181,11 +251,11 @@ def hooks_for_adset(cid: str, brief: ClientBrief, persona: Optional[Persona], ad
                              f"{bits}\nHooks:\n{listing}", _Scores)
         scores = {s.index: s for s in res.scores if 0 <= s.index < len(safe)}
     except Exception as e:
-        bus.log(cid, AGENT, f"{adset.ref}: critic unavailable ({e.__class__.__name__}); keeping generation order")
+        bus.log(cid, AGENT, f"{adset.name}: critic unavailable ({e.__class__.__name__}); keeping generation order")
     order = sorted(range(len(safe)), key=lambda i: -(scores[i].score if i in scores else 5 - i * 0.01))
     kept = [(safe[i], scores[i].score if i in scores else None) for i in order[:n_keep]]
-    bus.log(cid, AGENT, f"{adset.ref}: critic kept {len(kept)}/{len(safe)}: " +
-            " | ".join(f"{s if s is not None else '-'} “{g.text}”" for g, s in kept))
+    bus.log(cid, AGENT, f"{adset.name}: kept the best {len(kept)} of {len(safe)}: " +
+            " | ".join(f"“{g.text}”" + (f" ({s:.0f}/10)" if s is not None else "") for g, s in kept))
 
     concepts: dict[int, _Concept] = {}
     try:
@@ -197,10 +267,11 @@ def hooks_for_adset(cid: str, brief: ClientBrief, persona: Optional[Persona], ad
         bus.log(cid, AGENT, f"{adset.ref}: copywriter unavailable ({e.__class__.__name__}); using template copy")
 
     out = []
-    p = brief.products[0]
+    p = brief.product(adset.product)
+    one = brief.creative_focus == "product"  # a range / brand / photo ad never quotes one product's price
     for i, (g, score) in enumerate(kept):
         c = concepts.get(i) or _Concept(index=i, headline=p.name, primary_text=f"{g.text} {' · '.join(p.usp[:2])}",
-                                        description=(f"{brief.budget.currency} {p.price:,.0f}" if p.price else ""),
+                                        description=(f"{brief.budget.currency} {p.price:,.0f}" if p.price and one else ""),
                                         on_screen_text=g.text)
         copy = fit_copy(AdCopy(primary_text=c.primary_text, headline=c.headline, description=c.description,
                                cta=c.cta or GOAL_CTA[brief.goal]), g.text, brief)
@@ -216,7 +287,7 @@ def hooks_step(state: RuneState) -> dict:
     cid = state["client_id"]
     if demo_mode(state):
         bus.log(cid, AGENT, "Demo run: using the fixture hooks")
-        return {"hooks": fixture("hooks")}
+        return {"hooks": fixture("hooks", cid)}
 
     brief = ClientBrief.model_validate(state["brief"])
     research = ResearchReport.model_validate(state["research"])
@@ -232,7 +303,8 @@ def hooks_step(state: RuneState) -> dict:
         ids = slots + [f"h_{short}_x{i}" for i in range(1, len(kept) - len(slots) + 1)]
         return [h.model_copy(update={"id": i}).model_dump(mode="json") for i, h in zip(ids, kept)]
 
-    bus.log(cid, AGENT, f"Writing hooks for {len(bp.adsets())} ad sets" + (f"; applying: {note}" if note else ""))
+    own_ads = [a for a in bp.adsets() if a.ads]  # retargeting / catalog ad sets run other ads or Meta's catalog
+    bus.log(cid, AGENT, f"Writing hooks for {len(own_ads)} ad sets" + (f"; applying: {note}" if note else ""))
     with ThreadPoolExecutor(max_workers=2) as ex:
-        hooks = [h for hs in ex.map(one, bp.adsets()) for h in hs]
+        hooks = [h for hs in ex.map(one, own_ads) for h in hs]
     return {"hooks": hooks}

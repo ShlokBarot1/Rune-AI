@@ -1,11 +1,50 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, Globe, Sparkles, Wand2 } from "lucide-react";
+import { ArrowRight, Film, Globe, ImagePlus, Sparkles, Wand2, X } from "lucide-react";
 import { msgText, post, usePoll, useEvents, type Json } from "@/lib/api";
 import { BriefCard } from "@/components/rune/Views";
 import ApprovalDock from "@/components/rune/ApprovalDock";
 import BriefEditor from "@/components/rune/BriefEditor";
+import { uploadFile } from "@/lib/run";
+
+type Own = { file: File; url: string; primary_text: string; headline: string };
+
+/** The client's finished ads: pick files, optionally type their copy. Nothing gets generated for these. */
+function OwnCreatives({ items, setItems }: { items: Own[]; setItems: (f: (x: Own[]) => Own[]) => void }) {
+  const add = (files: FileList | null) => {
+    // copy now: the FileList empties when the input is reset, before React runs the updater
+    const picked = Array.from(files ?? []).map((file) => ({ file, url: URL.createObjectURL(file), primary_text: "", headline: "" }));
+    setItems((x) => [...x, ...picked]);
+  };
+  const set = (i: number, k: "primary_text" | "headline", v: string) => setItems((x) => x.map((o, j) => (j === i ? { ...o, [k]: v } : o)));
+  return (
+    <div className="mt-3 flex flex-col gap-2">
+      {items.map((o, i) => (
+        <div key={o.url} className="tile flex items-start gap-3 !p-2.5">
+          <div className="relative h-20 w-16 shrink-0 overflow-hidden rounded-xl bg-black">
+            {o.file.type.startsWith("video")
+              ? <><video src={o.url} muted className="h-full w-full object-cover" /><Film size={12} className="absolute right-1 top-1 text-white" /></>
+              : <img src={o.url} alt="" className="h-full w-full object-cover" />}
+          </div>
+          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <div className="meta truncate">{o.file.name} · {(o.file.size / 1e6).toFixed(1)} MB</div>
+            <input className="input !py-1.5 !text-[13px]" placeholder="Headline (optional, the agents write it otherwise)" maxLength={60}
+              value={o.headline} onChange={(e) => set(i, "headline", e.target.value)} />
+            <input className="input !py-1.5 !text-[13px]" placeholder="Primary text (optional)" maxLength={500}
+              value={o.primary_text} onChange={(e) => set(i, "primary_text", e.target.value)} />
+          </div>
+          <button className="circle sm" aria-label={`Remove ${o.file.name}`} onClick={() => { URL.revokeObjectURL(o.url); setItems((x) => x.filter((_, j) => j !== i)); }}><X size={13} /></button>
+        </div>
+      ))}
+      <label className="tile flex cursor-pointer items-center justify-center gap-2 !py-4 text-[13px] font-semibold" style={{ borderStyle: "dashed" }}>
+        <ImagePlus size={16} /> Add images or videos (PNG, JPG, WEBP, MP4, MOV)
+        <input type="file" multiple accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime,video/webm,.m4v" className="hidden"
+          onChange={(e) => { add(e.target.files); e.target.value = ""; }} />
+      </label>
+    </div>
+  );
+}
 
 const EXAMPLES = ["https://sleepyowl.co", "https://www.bluetokaicoffee.com", "https://www.thewholetruthfoods.com"];
 
@@ -26,6 +65,9 @@ export default function Onboarding() {
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [mode, setMode] = useState<"ai" | "own">("ai");
+  const [own, setOwn] = useState<Own[]>([]);
+  const [err, setErr] = useState<string | null>(null);
   useEffect(() => { setCid(new URLSearchParams(window.location.search).get("client")); }, []);
 
   const [snap, , reload] = usePoll<Json>(cid ? `/runs/${cid}` : null, 2000);
@@ -48,13 +90,19 @@ export default function Onboarding() {
   const pending = snap?.pending?.[0];
   const intakeDone = !!snap?.values?.brief && !(pending?.type === "gate" && pending?.gate === "intake") && !snap?.next?.[0]?.startsWith("intake");
 
+  const ready = !!url.trim() && (mode === "ai" || own.length > 0);
   const start = async () => {
-    setBusy(true);
+    setBusy(true); setErr(null);
     try {
-      const r = await post("/runs", { intake: { website: url.trim(), notes } });
+      const id = `client_${crypto.randomUUID().replace(/-/g, "").slice(0, 10)}`;
+      const creatives = [];
+      for (const o of own.filter(() => mode === "own")) {  // one at a time: videos can be large
+        creatives.push({ path: await uploadFile(id, o.file), primary_text: o.primary_text.trim(), headline: o.headline.trim() });
+      }
+      const r = await post("/runs", { client_id: id, intake: { website: url.trim(), notes, ...(creatives.length ? { creatives } : {}) } });
       setCid(r.client_id);
       window.history.replaceState(null, "", `/onboarding?client=${r.client_id}`);
-    } finally { setBusy(false); }
+    } catch (e) { setErr(String((e as Error).message ?? e)); } finally { setBusy(false); }
   };
 
   if (!cid) return (
@@ -71,13 +119,23 @@ export default function Onboarding() {
           <div className="relative flex-1">
             <Globe size={16} className="absolute left-4 top-1/2 -translate-y-1/2" style={{ color: "var(--text-3)" }} />
             <input className="input !h-14 !rounded-full !pl-11 !text-[15px]" placeholder="https://yourbrand.com" value={url}
-              onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.key === "Enter" && url && start()} />
+              onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.key === "Enter" && ready && !busy && start()} />
           </div>
-          <button className="btn btn-primary !h-14 !px-7 !text-[14px]" disabled={!url || busy} onClick={start}>
-            <Wand2 size={16} /> Start agents
+          <button className="btn btn-primary !h-14 !px-7 !text-[14px]" disabled={!ready || busy} onClick={start}>
+            <Wand2 size={16} /> {busy ? (mode === "own" ? "Uploading…" : "Starting…") : "Start agents"}
           </button>
         </div>
         <textarea className="input mt-2 !rounded-[20px] min-h-16" placeholder="Optional: anything we should know — budget, dates, goal, markets…" value={notes} onChange={(e) => setNotes(e.target.value)} />
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="label">Ad creatives</span>
+          <div className="seg">
+            <button className={mode === "ai" ? "on" : ""} onClick={() => setMode("ai")}>Agents make them</button>
+            <button className={mode === "own" ? "on" : ""} onClick={() => setMode("own")}>I have my own</button>
+          </div>
+          <span className="meta">{mode === "own" ? "Your files run as they are. No AI images or video." : "AI backgrounds, your real product photo, rendered copy."}</span>
+        </div>
+        {mode === "own" && <OwnCreatives items={own} setItems={setOwn} />}
+        {err && <div className="pill bad mt-2 !whitespace-normal">{err}</div>}
       </section>
       <div className="flex flex-wrap justify-center gap-2">
         {EXAMPLES.map((e) => <button key={e} className="pill !py-1.5 !px-3 !text-[12px]" style={{ background: "#fff" }} onClick={() => setUrl(e)}>{e.replace("https://", "")}</button>)}
@@ -101,7 +159,7 @@ export default function Onboarding() {
             <span className="grid h-9 w-9 place-items-center rounded-full" style={{ background: "var(--ink)", color: "var(--accent)" }}><Sparkles size={15} /></span>
             <div><div className="title">Intake agent</div><div className="meta">reads the site, then asks only what&apos;s missing</div></div>
           </div>
-          <div className="-mr-2 flex flex-1 flex-col gap-2 overflow-y-auto pr-2">
+          <div className="-mr-2 flex flex-1 flex-col gap-2 overflow-y-auto pl-1 pr-2">{/* pl-1: room for the dots' 2px outline */}
             {chat.map((m) => m.sender === "human"
               ? <div key={m.seq} className="bubble light-right fade-in">{String(m.payload?.answer ?? msgText(m))}</div>
               : m.type === "QUESTION"

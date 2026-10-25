@@ -44,6 +44,14 @@ def test_budget_invariants():
     assert sum(skewed.adset_daily.values()) <= sum(plan.adset_daily.values()) + 1
 
 
+def test_budget_fix_that_starves_an_adset_keeps_equal_split(monkeypatch):
+    from shlok import pipeline
+    monkeypatch.setattr(pipeline, "_weights_from_note", lambda s, n: {"as_wfh_price": 1, "as_fit_nosugar": 0})
+    state = {"brief": load("brief"), "package": load("package"), "budget_plan": {}, "notes": {"budget": "consolidate"}}
+    plan = pipeline.budget_step(state)["budget_plan"]
+    assert len(set(plan["adset_daily"].values())) == 1  # fell back to equal, didn't raise
+
+
 def test_full_pipeline_runs_to_live():
     from graph import build
 

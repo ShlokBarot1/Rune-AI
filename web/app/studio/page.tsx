@@ -14,6 +14,7 @@ export default function CreativeStudio() {
   const gateOpen = pending?.type === "gate" && pending?.gate === "creatives";
   const passed = pkg?.creatives.filter((c: Json) => c.qa?.passed).length ?? 0;
   const brand = v.brief?.business_name ?? "Brand";
+  const own = !!pkg?.creatives.length && pkg.creatives.every((c: Json) => c.model_used === "client-upload");
 
   return (
     <div className="flex flex-col gap-5">
@@ -49,11 +50,11 @@ export default function CreativeStudio() {
             </div>
             <div className="card !p-5">
               <div className="label flex items-center gap-1.5"><ImageIcon size={12} /> Images · <Film size={12} /> Videos</div>
-              <div className="hero-num mt-2">{pkg.creatives.filter((c: Json) => c.kind === "image").length}<span className="text-[22px] opacity-40"> · </span>{pkg.creatives.filter((c: Json) => c.kind === "video").length}</div>
-              <div className="meta">videos have voiceover + captions</div>
+              <div className="hero-num mt-2">{pkg.creatives.filter((c: Json) => c.kind !== "video").length}<span className="text-[22px] opacity-40"> · </span>{pkg.creatives.filter((c: Json) => c.kind === "video").length}</div>
+              <div className="meta">{own ? "your own files, nothing generated" : "videos have voiceover + captions"}</div>
             </div>
             <div className="card !p-5">
-              <div className="label flex items-center gap-1.5"><ShieldCheck size={12} /> Vision QA</div>
+              <div className="label flex items-center gap-1.5"><ShieldCheck size={12} /> {own ? "File checks" : "Vision QA"}</div>
               <div className="hero-num mt-2">{passed}<span className="text-[22px] opacity-40">/{pkg.creatives.length}</span></div>
               <div className="mt-2 h-1.5 rounded-full" style={{ background: "var(--bar)" }}>
                 <div className="h-1.5 rounded-full" style={{ width: `${(passed / pkg.creatives.length) * 100}%`, background: "var(--ink)" }} />

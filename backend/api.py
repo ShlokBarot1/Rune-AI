@@ -11,24 +11,26 @@ import os
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from core import bus
 from core.schemas import new_id, now
+import agency
 from graph import build
 from malav import api as malav_api
 from shlok import api as shlok_api
 
 app = FastAPI(title="Rune AI")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.middleware("http")(agency.guard)  # sign-in and per-campaign access when RUNE_AUTH=1 (core.auth)
 for d in ("media", "fixtures/media"):  # creative previews only — never mount the backend root (.env lives there)
     Path(d).mkdir(parents=True, exist_ok=True)
     app.mount(f"/files/{d}", StaticFiles(directory=d), name=d)
@@ -51,9 +53,13 @@ def _runs_db():
 def _run(cid: str, inp):
     try:
         graph.invoke(inp, cfg(cid))
+    except bus.Stopped:
+        bus.STOPPED.discard(cid)
+        bus.say(cid, "core", "human", "INFORM", {"text": "Stopped by you. The stage reruns from its start when you continue."})
     except Exception as e:
         bus.say(cid, "core", "human", "INFORM", {"error": f"{e.__class__.__name__}: {e}"})
     finally:
+        bus.STOPPED.discard(cid)
         _running.discard(cid)
 
 
@@ -72,18 +78,23 @@ def snapshot(cid: str) -> dict:
             "running": cid in _running}
 
 
+def known(cid: str) -> bool:
+    with _runs_db() as con:
+        return con.execute("select 1 from runs where client_id=?", (cid,)).fetchone() is not None
+
+
 def run_ids() -> list[str]:
     with _runs_db() as con:
         return [r["client_id"] for r in con.execute("select client_id from runs order by created_at desc")]
 
 
 class StartRun(BaseModel):
-    client_id: Optional[str] = None
+    client_id: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_-]{3,64}$")  # also a folder name under media/
     intake: dict = {}
 
 
 class Resume(BaseModel):
-    action: Optional[str] = None     # approve / changes / reject (gates)
+    action: Optional[Literal["approve", "changes", "reject"]] = None     # gates
     comment: str = ""
     answer: Optional[str] = None     # agent questions
 
@@ -91,6 +102,8 @@ class Resume(BaseModel):
 @app.post("/runs")
 def create_run(body: StartRun):
     cid = body.client_id or new_id("client")
+    if known(cid):  # starting again on the same thread would overwrite that campaign's state
+        raise HTTPException(409, "A campaign with this id already exists")
     with _runs_db() as con:
         con.execute("insert or ignore into runs values (?,?)", (cid, now().isoformat()))
     start(cid, {"client_id": cid, "intake": body.intake})
@@ -98,9 +111,9 @@ def create_run(body: StartRun):
 
 
 @app.get("/runs")
-def list_runs():
+def list_runs(request: Request):
     out = []
-    for cid in run_ids():
+    for cid in agency.visible(request, run_ids()):
         s = snapshot(cid)
         v = s["values"]
         out.append({"client_id": cid, "name": (v.get("brief") or {}).get("business_name", cid), "next": s["next"],
@@ -111,6 +124,8 @@ def list_runs():
 
 @app.get("/runs/{cid}")
 def get_run(cid: str):
+    if not known(cid):
+        raise HTTPException(404, "No such campaign")
     return snapshot(cid)
 
 
@@ -123,10 +138,29 @@ def resume(cid: str, body: Resume):
     return {"ok": True}
 
 
+@app.post("/runs/{cid}/stop")
+def stop(cid: str):
+    """Stop the stage that is running; the checkpoint stays at that stage's start."""
+    if cid not in _running:
+        return {"stopped": False}
+    bus.STOPPED.add(cid)
+    return {"stopped": True}
+
+
+@app.post("/runs/{cid}/continue")
+def continue_run(cid: str):
+    """Rerun the current stage after a stop (or after the API restarted mid-stage)."""
+    s = snapshot(cid)
+    if s["running"] or s["pending"] or not s["next"]:
+        raise HTTPException(409, "Nothing to continue: the run is going, waiting for you, or finished")
+    start(cid, None)
+    return {"ok": True}
+
+
 @app.get("/approvals")
-def approvals():
+def approvals(request: Request):
     out = []
-    for cid in run_ids():
+    for cid in agency.visible(request, run_ids()):
         s = snapshot(cid)
         name = (s["values"].get("brief") or {}).get("business_name", cid)
         out += [{"client_id": cid, "client": name, **p} for p in s["pending"]]
@@ -154,3 +188,5 @@ shlok_api.start_scheduler(run_ids)
 app.include_router(shlok_api.router)
 malav_api.bind(graph)
 app.include_router(malav_api.router)
+agency.bind(graph)
+app.include_router(agency.router)

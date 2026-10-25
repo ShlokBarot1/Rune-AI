@@ -2,7 +2,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Check, Loader2, Hand } from "lucide-react";
 import { msgText, useEvents, type BusMsg } from "@/lib/api";
-import { STAGES, agentColor, agentName, agentShort, type StageId, type StageState } from "@/lib/run";
+import { STAGES, agentColor, agentName, stageLabel, type StageId, type StageState } from "@/lib/run";
 
 export function PipelineRail({ states, selected, onSelect }: {
   states: Record<StageId, StageState>; selected: StageId; onSelect: (s: StageId) => void;
@@ -56,26 +56,50 @@ function Step({ text }: { text: string }) {
   );
 }
 
-type Block = { kind: "thought"; sender: string; msgs: BusMsg[] } | { kind: "msg"; m: BusMsg };
+type Block = { kind: "thought"; stage: string; sender: string; msgs: BusMsg[] } | { kind: "msg"; m: BusMsg };
+
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** A stage's steps as lines: web searches merge into one list, and when several agents share a stage
+ *  (the 3 researchers) each line says who did it. */
+function stepLines(msgs: BusMsg[]) {
+  const multi = new Set(msgs.map((m) => m.sender)).size > 1;
+  const out: { seq: number; text: string; search?: boolean }[] = [];
+  for (const m of msgs) {
+    const t = msgText(m);
+    const q = t.startsWith("Searched: ") ? t.slice(10) : null;
+    const prev = out[out.length - 1];
+    if (q && prev?.search) { prev.text += ` | ${q}`; continue; }
+    const parts = m.sender.split(".");
+    const who = multi && parts.length > 2 ? `${cap(parts[parts.length - 1])}: ` : "";
+    out.push(q ? { seq: m.seq, text: `Searched the web: ${q}`, search: true } : { seq: m.seq, text: who + t });
+  }
+  return out;
+}
 
 function Thought({ b, end, live, collapsed }: { b: Extract<Block, { kind: "thought" }>; end: string; live: boolean; collapsed: boolean }) {
   const [open, setOpen] = useState(!collapsed);
   useEffect(() => { setOpen(!collapsed); }, [collapsed]);
   const [bg, fg] = agentColor(b.sender);
   const verb = VERBS[b.msgs[0].seq % VERBS.length];
+  const lines = stepLines(b.msgs);
+  const result = lines[lines.length - 1].text;
   return (
     <div className="fade-in py-2">
       <button className="flex w-full items-center gap-2.5 text-left" onClick={() => setOpen(!open)}>
-        <span className="agent-dot" style={{ background: bg, color: fg }}>{agentShort(b.sender)}</span>
-        <span className="font-semibold" style={{ color: bg === "#ffffff" ? "#fff" : bg }}>{agentName(b.sender)}</span>
+        <span className="agent-dot" style={{ background: bg, color: fg }}>{b.stage.slice(0, 2).toUpperCase()}</span>
+        <span className="font-semibold" style={{ color: bg === "#ffffff" ? "#fff" : bg }}>{b.stage}</span>
         <span className={`text-[11.5px] ${live ? "shimmer" : ""}`} style={{ color: "var(--night-text-2)" }}>
-          {live ? `${verb}…` : `thought for ${secs(b.msgs[0].created_at, end)}s`}
+          {live ? `${verb}…` : `took ${secs(b.msgs[0].created_at, end)}s`}
         </span>
-        <span className="ml-auto text-[11px]" style={{ color: "var(--night-text-2)" }}>{open ? "▾" : `▸ ${b.msgs.length} step${b.msgs.length > 1 ? "s" : ""}`}</span>
+        <span className="ml-auto text-[11px]" style={{ color: "var(--night-text-2)" }}>{open ? "▾" : `▸ ${lines.length} step${lines.length > 1 ? "s" : ""}`}</span>
       </button>
+      {!open && (  // folded: just the outcome, one line
+        <div className="ml-[35px] mt-1 truncate text-[12px]" style={{ color: "var(--night-text)" }} title={result}>{result.split(" | ")[0]}</div>
+      )}
       {open && (
         <div className="ml-[13px] mt-1.5 flex flex-col gap-1.5 border-l pl-[22px] text-[12.5px] leading-relaxed" style={{ borderColor: "var(--night-3)", color: "var(--night-text)" }}>
-          {b.msgs.map((m) => <Step key={m.seq} text={msgText(m)} />)}
+          {lines.map((l) => <Step key={l.seq} text={l.text} />)}
         </div>
       )}
     </div>
@@ -119,12 +143,17 @@ export function Theater({ clientId, height = 640, compact = false }: { clientId:
 /** Steps grouped into "thoughts" per agent; conversations, questions and your decisions stand alone. */
 export function Feed({ msgs: shown, working, keepOpen = 6 }: { msgs: BusMsg[]; working: boolean; keepOpen?: number }) {
   // consecutive steps of one agent = one "thought"; conversations, questions and your decisions stand alone
+  // consecutive steps of one stage = one block, whichever of its agents posted them
   const blocks: Block[] = [];
+  let last: BusMsg | undefined;
   for (const m of shown) {
+    if (last && last.sender === m.sender && last.type === m.type && msgText(last) === msgText(m)) continue;  // repeats
+    last = m;
     const step = m.sender !== "human" && !between(m) && m.type !== "QUESTION" && (m.type === "LOG" || m.recipient === "theater");
     const prev = blocks[blocks.length - 1];
-    if (step && prev?.kind === "thought" && prev.sender === m.sender) prev.msgs.push(m);
-    else blocks.push(step ? { kind: "thought", sender: m.sender, msgs: [m] } : { kind: "msg", m });
+    const stage = stageLabel(m.sender);
+    if (step && prev?.kind === "thought" && prev.stage === stage) prev.msgs.push(m);
+    else blocks.push(step ? { kind: "thought", stage, sender: m.sender, msgs: [m] } : { kind: "msg", m });
   }
 
   return (

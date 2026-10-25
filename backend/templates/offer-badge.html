@@ -1,7 +1,7 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><style>
+<html><head><meta charset="utf-8">${FONT_LINK}<style>
 :root { --w: ${W}px; --h: ${H}px; --u: ${U}px; --pad: ${PAD}px; --top: ${TOP}px; --cap: ${CAP}px;
-        --c1: ${C1}; --c2: ${C2}; --font: "${FONT}"; }
+        --c1: ${C1}; --c2: ${C2}; --font: "${FONT}"; --font2: "${FONT2}"; }
 ${BASE_CSS}
 .headline { position: absolute; left: var(--pad); right: 38%; top: calc(var(--top) + var(--u) * 10);
   font-size: calc(var(--u) * 7.2); line-height: 1.05; font-weight: 800; text-shadow: 0 2px 18px rgba(0,0,0,.45); }
@@ -12,10 +12,10 @@ ${BASE_CSS}
   box-shadow: 0 calc(var(--u) * 1) calc(var(--u) * 4) rgba(0,0,0,.35); border: calc(var(--u) * .8) dashed var(--c1); }
 .product { bottom: ${PROD_BOTTOM}px; height: ${PROD_H}px; max-width: 65%; }
 .ctawrap { position: absolute; left: var(--pad); top: ${CTA_TOP}px; }
-</style></head><body class="${BODY_CLASS}">
+</style></head><body class="${BODY_CLASS}" dir="${DIR}">
 <div class="bg" style="background-image:url('${BG}')"></div><div class="shade"></div>
 ${LOGO}
-<div class="headline">${HEADLINE}</div>
+<div class="headline">${HEADLINE}<div class="offer">${OFFER}</div></div>
 <div class="badge ${BADGE_CLASS}">${SUB}</div>
 <img class="product ${PROD_CLASS}" src="${PRODUCT}">
 <div class="ctawrap ${CTA_CLASS}"><span class="cta">${CTA}</span></div>

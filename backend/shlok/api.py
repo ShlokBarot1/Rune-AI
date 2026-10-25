@@ -52,7 +52,9 @@ class Decision(BaseModel):
 
 def run_cycle(cid: str, source: Optional[str] = None, day: int = 0, days: int = 7) -> dict:
     state = _live_state(cid)
-    out = live.cycle(state, source=source or ("simulated" if meta.dry_run() else "meta"), day=day, days=days)
+    # sandbox accounts never deliver: RUNE_INSIGHTS=simulated keeps real launches but simulates performance
+    default = "simulated" if meta.dry_run() or os.getenv("RUNE_INSIGHTS") == "simulated" else "meta"
+    out = live.cycle(state, source=source or default, day=day, days=days)
     _save(cid, out.pop("update"))
     return out
 

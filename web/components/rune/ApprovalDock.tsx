@@ -1,7 +1,33 @@
 "use client";
 import { useState } from "react";
-import { Check, Hand, MessageSquare, Rocket, RotateCcw, Send } from "lucide-react";
+import { CalendarDays, Check, Hand, ImagePlus, MessageSquare, Rocket, RotateCcw, Send } from "lucide-react";
 import { GATE_TITLES, post, type Json } from "@/lib/api";
+import { uploadFile } from "@/lib/run";
+
+const RANGE = /^(\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})$/;
+
+/** Start/end calendars for a date-range question (its suggestion looks like "2026-10-28 to 2026-11-26");
+ *  sends the same "start to end" text the agent already parses. Nothing for other questions. */
+export function DateRange({ suggested, busy, onSend }: { suggested?: string; busy: boolean; onSend: (answer: string) => void }) {
+  const m = suggested?.match(RANGE);
+  const [start, setStart] = useState(m?.[1] ?? "");
+  const [end, setEnd] = useState(m?.[2] ?? "");
+  if (!m) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  const ok = !!start && !!end && start >= today && end > start;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <CalendarDays size={16} style={{ color: "var(--text-2)" }} aria-hidden />
+      <input type="date" className="input !h-9 !w-auto" aria-label="Start date" value={start} min={today}
+        onChange={(e) => setStart(e.target.value)} />
+      <span className="meta">to</span>
+      <input type="date" className="input !h-9 !w-auto" aria-label="End date" value={end} min={start || today}
+        onChange={(e) => setEnd(e.target.value)} />
+      <button disabled={busy || !ok} className="btn btn-primary !h-9" onClick={() => onSend(`${start} to ${end}`)}>Use these dates</button>
+      {start && end && !ok && <span className="meta">End must be after start, and start can&apos;t be in the past</span>}
+    </div>
+  );
+}
 
 /** What the run is waiting on (gate / question / pushback / go-live), docked at the bottom of the canvas. */
 export default function ApprovalDock({ item, clientId, onDone, prefill }: {
@@ -10,6 +36,16 @@ export default function ApprovalDock({ item, clientId, onDone, prefill }: {
   const [comment, setComment] = useState(prefill ?? "");
   const [open, setOpen] = useState(!!prefill);
   const [busy, setBusy] = useState(false);
+  const [upErr, setUpErr] = useState<string | null>(null);
+  const upload = async (files: File[]) => {  // several files: one media path per line
+    if (!files.length) return;
+    setBusy(true); setUpErr(null);
+    try {
+      const paths = [];
+      for (const f of files) paths.push(await uploadFile(clientId, f));
+      await send({ answer: paths.join("\n") });
+    } catch (e) { setUpErr(String((e as Error).message)); setBusy(false); }
+  };
   const send = async (body: Json) => {
     setBusy(true);
     try { await post(`/runs/${clientId}/resume`, body); setComment(""); setOpen(false); }
@@ -39,8 +75,17 @@ export default function ApprovalDock({ item, clientId, onDone, prefill }: {
               <button key={o} disabled={busy} className={`btn ${i === 0 ? "btn-lime" : "btn-ghost"} !h-9`} onClick={() => send({ answer: o })}>{o}</button>
             ))}
           </div>
+          <DateRange suggested={item.options?.[0]} busy={busy} onSend={(a) => send({ answer: a })} />
+          {item.upload && (
+            <label className={`btn btn-primary !h-9 w-fit cursor-pointer ${busy ? "opacity-50" : ""}`}>
+              <ImagePlus size={14} /> {busy ? "Uploading…" : typeof item.upload === "string" ? item.upload : "Upload photo"}
+              <input type="file" multiple accept="image/png,image/jpeg,image/webp" className="hidden" disabled={busy}
+                onChange={(e) => { const fs = Array.from(e.target.files ?? []); e.target.value = ""; upload(fs); }} />
+            </label>
+          )}
+          {upErr && <span className="pill bad !whitespace-normal">{upErr}</span>}
           <div className="flex gap-2">
-            <input className="input" placeholder="Or type your own answer…" value={comment} onChange={(e) => setComment(e.target.value)}
+            <input className="input" placeholder={item.upload ? "Or paste an image URL…" : "Or type your own answer…"} value={comment} onChange={(e) => setComment(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && comment && send({ answer: comment })} />
             <button disabled={busy || !comment} className="btn btn-primary" onClick={() => send({ answer: comment })}><Send size={14} /></button>
           </div>

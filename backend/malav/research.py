@@ -15,7 +15,7 @@ from datetime import date
 
 from pydantic import BaseModel
 
-from core import bus, llm, skills
+from core import bus, calendar, langs, llm, skills
 from core.schemas import ClientBrief, Competitor, Persona, ResearchReport
 from core.state import RuneState
 from malav import web
@@ -132,8 +132,11 @@ def audience(ctx: Ctx) -> dict:
     agent, b = "malav.research.audience", ctx.brief
     product, geo = _generic(b), " ".join(b.geo)
     bus.log(ctx.cid, agent, f"Mining reviews and Reddit for '{product}' (skills: customer-research)")
+    # customers who speak other languages review and complain in them: search there too
+    other = [langs.name(x) for x in b.languages if x and x != "en"][:2]
     results = _search_all(ctx, agent, [f"{product} reviews {geo}", f"{product} reddit",
-                                       f"{b.business_name} reviews", f"{product} complaints problems"])
+                                       f"{b.business_name} reviews", f"{product} complaints problems",
+                                       *(f"{product} review in {lang_name}" for lang_name in other)])
     extra = ""
     thread = next((r["url"] for r in results if "reddit.com" in r["url"]), None)
     if thread:
@@ -169,20 +172,33 @@ def competitors(ctx: Ctx) -> dict:
     names = [c for c in names if c.name.lower() != b.business_name.lower()]
     bus.log(ctx.cid, agent, f"Competitors: {', '.join(c.name for c in names) or 'none found'}")
 
+    # each competitor: Meta Ad Library, else their website, else a web search; one source failing isn't the end
     material = []
     use_ads = bool(os.getenv("META_ACCESS_TOKEN"))
     for c in names:
-        try:
-            if use_ads:
+        if use_ads:
+            try:
                 ads = web.ad_library(c.name, EU)
                 bodies = [" / ".join(a.get("ad_creative_bodies") or []) for a in ads][:6]
                 material.append(f"## {c.name} — {len(ads)} ads in Meta Ad Library\n" + "\n".join(f"- {x[:300]}" for x in bodies))
                 bus.log(ctx.cid, agent, f"Pulled {len(ads)} {c.name} ads from the Meta Ad Library")
-            elif c.url:
+                continue
+            except Exception as e:
+                use_ads = False  # a permission problem fails the same way for every brand
+                bus.log(ctx.cid, agent, f"Meta Ad Library unavailable ({_why(e)}); reading websites and search results instead")
+        try:
+            if c.url:
                 material.append(f"## {c.name} ({c.url}) website\n{web.read_page(c.url, 2500)}")
                 bus.log(ctx.cid, agent, f"Read {c.name}'s website")
+                continue
+        except Exception:
+            pass
+        try:
+            hits = web.search(f"{c.name} ad campaign {' '.join(b.geo)}", 4)
+            material.append(f"## {c.name} (web search)\n" + "\n".join(f"- {h['title']}: {h['content'][:300]}" for h in hits))
+            bus.log(ctx.cid, agent, f"Looked up {c.name}'s recent campaigns on the web")
         except Exception as e:
-            bus.log(ctx.cid, agent, f"Couldn't research {c.name} ({e.__class__.__name__})")
+            bus.log(ctx.cid, agent, f"Couldn't find anything on {c.name} ({_why(e)})")
     if not names:
         return {"competitors": [], "white_space": []}
     out = llm.structured("reason", skills.with_skills(COMPETITOR_SYSTEM, ["competitor-profiling"], ctx.context_doc),
@@ -202,9 +218,26 @@ def trends(ctx: Ctx) -> dict:
     try:
         lines += google_trends(plan.keywords[:3], b.geo[0])
         bus.log(ctx.cid, agent, f"Google Trends checked for {', '.join(plan.keywords[:3])}")
-    except Exception as e:
-        bus.log(ctx.cid, agent, f"Google Trends unavailable ({e.__class__.__name__}); using seasonal hooks only")
+    except Exception as e:  # pytrends is unofficial and Google rate-limits it (429) often
+        try:
+            hits = [h for kw in plan.keywords[:2] for h in web.search(f"{kw} trends {date.today().year} {b.geo[0]}", 3)]
+            lines += [f"Trend article: {h['title']}: {h['content'][:200]}" for h in hits]
+            bus.log(ctx.cid, agent, f"Google Trends unavailable ({_why(e)}); read {len(hits)} trend articles instead")
+        except Exception:
+            bus.log(ctx.cid, agent, f"Google Trends unavailable ({_why(e)}); using seasonal hooks only")
     return {"trends": lines}
+
+
+def _why(e: Exception) -> str:
+    """A failure in words a client understands."""
+    s = str(e)
+    if "429" in s or "TooManyRequests" in e.__class__.__name__:
+        return "Google is limiting requests right now"
+    if "permission" in s.lower() or "App role required" in s or re.search(r"\b40[03]\b", s):
+        return "our Meta app doesn't have access yet"
+    if "timed out" in s.lower() or "Timeout" in e.__class__.__name__:
+        return "the site took too long"
+    return "the site blocked us"
 
 
 def google_trends(keywords: list[str], geo: str) -> list[str]:
@@ -281,7 +314,7 @@ def research_step(state: RuneState) -> dict:
     cid = state["client_id"]
     if demo_mode(state):
         bus.log(cid, "malav.research", "Demo run: using the fixture research")
-        return {"research": fixture("research")}
+        return {"research": fixture("research", cid)}
 
     ctx = Ctx(cid=cid, brief=ClientBrief.model_validate(state["brief"]), context_doc=state.get("context_doc", ""),
               note=(state.get("notes") or {}).get("research", ""))
@@ -296,10 +329,17 @@ def research_step(state: RuneState) -> dict:
         parts["personas"] = [_fallback_persona(ctx.brief)]
         bus.log(cid, "malav.research", "No evidence-backed personas; using one core persona from the brief")
 
-    syn = _synthesize(ctx, parts)
+    b = ctx.brief  # shopping moments come from the calendar, not only from what the model remembers
+    moments = calendar.events_in(b.budget.start, b.budget.end, b.geo)
+    parts["trends"] = [f"Moment: {m.name}, {m.day:%d %b} (buying from {m.window[0]:%d %b})" for m in moments] + parts["trends"]
+    from shlok.history import account_learnings
+    past = account_learnings(cid)  # a brand that has advertised before: what already worked for it
+    syn = _synthesize(ctx, {**parts, "account_history": past["text"] if past else []})
     report = ResearchReport(client_id=cid, summary=syn.summary, product_insights=parts["product_insights"],
                             personas=parts["personas"], competitors=parts["competitors"], trends=parts["trends"],
-                            recommended_angles=syn.recommended_angles or parts["white_space"])
+                            recommended_angles=([f"Proven in your account: {w[:120]}" for w in past["winners"]] if past else [])
+                            + (syn.recommended_angles or parts["white_space"]),
+                            benchmarks={"cpa": past["cpa"]} if past and past["cpa"] else {})
     bus.log(cid, "malav.research", f"Research ready: {len(report.personas)} personas, {len(report.competitors)} "
                                    f"competitors, {len(report.recommended_angles)} angles")
     out = {"research": report.model_dump(mode="json")}

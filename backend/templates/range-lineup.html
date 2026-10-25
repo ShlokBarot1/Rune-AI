@@ -1,0 +1,32 @@
+<!doctype html>
+<html><head><meta charset="utf-8">${FONT_LINK}<style>
+:root { --w: ${W}px; --h: ${H}px; --u: ${U}px; --pad: ${PAD}px; --top: ${TOP}px; --cap: ${CAP}px;
+        --c1: ${C1}; --c2: ${C2}; --font: "${FONT}"; --font2: "${FONT2}"; }
+${BASE_CSS}
+/* A range: headline, benefit tags, then the products side by side (tallest in the middle). */
+.headline { position: absolute; left: var(--pad); right: var(--pad); top: calc(var(--top) + var(--u) * 10);
+  font-size: calc(var(--u) * 7.4); line-height: 1.05; font-weight: 800; text-shadow: 0 2px 18px rgba(0,0,0,.45); }
+.sub:empty { display: none; }
+.sub { margin-top: calc(var(--u) * 2); font-size: calc(var(--u) * 3.6); font-weight: 500; opacity: .95; }
+.tags { margin-top: calc(var(--u) * 2.6); display: flex; flex-wrap: wrap; gap: calc(var(--u) * 1.4); }
+.tags span { background: rgba(255,255,255,.94); color: #111; font-weight: 800; border-radius: 999px;
+  font-size: calc(var(--u) * 3); padding: calc(var(--u) * 1) calc(var(--u) * 2.4); text-shadow: none; }
+.range { position: absolute; left: var(--pad); right: var(--pad); bottom: ${PROD_BOTTOM}px; height: ${PROD_H}px;
+  display: flex; align-items: flex-end; justify-content: center; gap: calc(var(--u) * 1.5); }
+.range img { height: 82%; flex: 1 1 0; min-width: 0; object-fit: contain; object-position: bottom;
+  filter: drop-shadow(0 calc(var(--u) * 1.6) calc(var(--u) * 2.4) rgba(0,0,0,.45)); }
+.range img.mid { height: 100%; }
+/* 4 products: a 2x2 grid, so wide packshots aren't shrunk to a quarter of the width */
+.range.many { flex-wrap: wrap; align-content: flex-end; row-gap: calc(var(--u) * 1); }
+.range.many img, .range.many img.mid { flex: 0 0 47%; height: 48%; }
+.ctawrap { margin-top: calc(var(--u) * 3.4); text-shadow: none; }   /* under the tags, clear of the products */
+body.wide .headline { right: 48%; }
+body.wide .range { left: 50%; top: var(--pad); height: auto; }
+</style></head><body class="${BODY_CLASS}" dir="${DIR}">
+<div class="bg" style="background-image:url('${BG}')"></div><div class="shade"></div>
+${LOGO}
+<div class="headline">${HEADLINE}<div class="sub">${SUB}</div><div class="tags">${TAGS}</div><div class="offer">${OFFER}</div>
+  <div class="ctawrap ${CTA_CLASS}"><span class="cta">${CTA}</span></div></div>
+<div class="range ${RANGE_CLASS}">${PRODUCTS}</div>
+<div class="caption">${CAPTION}</div>
+</body></html>

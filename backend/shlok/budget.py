@@ -6,10 +6,11 @@ number of ad sets.
 from __future__ import annotations
 
 import math
+from datetime import timedelta
 import os
 from typing import Optional
 
-from core import bus
+from core import bus, calendar
 from core.schemas import BudgetPlan, CampaignBlueprint, ClientBrief, FeasibilityResult
 
 from . import meta
@@ -102,6 +103,33 @@ def allocate(brief: ClientBrief, blueprint: CampaignBlueprint,
     )
     if adset_weights:
         rationale += f" Ad-set weights applied: {adset_weights}."
+    peaks = peak_boosts(brief, adset_daily, reserve)
+    if peaks:
+        rationale += (" On " + ", ".join(f"{p['name']} ({p['start']}→{p['end']})" for p in peaks)
+                      + f" the {reserve:,.0f}/day reserve boosts the ad sets instead: people buy most then.")
     return BudgetPlan(client_id=brief.client_id, currency=brief.budget.currency, total=brief.budget.total, days=days,
                       mode="ABO", bid_strategy="LOWEST_COST_WITHOUT_CAP", testing_reserve=reserve,
-                      campaign_daily=campaign_daily, adset_daily=adset_daily, rationale=rationale)
+                      campaign_daily=campaign_daily, adset_daily=adset_daily, rationale=rationale, peaks=peaks)
+
+
+def peak_boosts(brief: ClientBrief, adset_daily: dict[str, float], reserve: float) -> list[dict]:
+    """Budget boosts on the days of the flight's shopping moments, paid from the daily testing reserve (so the
+    total never moves). Overlapping moments merge into one window. [{name, start, end, extra: {adset: per day}}]"""
+    spend = sum(adset_daily.values())
+    if reserve < 1 or not spend:
+        return []
+    windows: list[list] = []
+    # the buying peak is the last days before a moment (a whole sale, they're short); month-long seasons stay
+    # in the copy, boosting them would just be a bigger budget
+    spans = sorted((max(m.day - timedelta(days=min(m.lead_days, 3 if m.kind != "sale" else 7)), brief.budget.start),
+                    min(m.day, brief.budget.end), m.name)
+                   for m in calendar.events_in(brief.budget.start, brief.budget.end, brief.geo) if m.lead_days <= 25)
+    spans = [x for x in spans if x[0] <= x[1]]
+    for s, e, name in spans:  # by window start: a long buying window swallows the short ones inside it
+        if windows and s <= windows[-1][2]:
+            windows[-1][0] += f" + {name}"
+            windows[-1][2] = max(windows[-1][2], e)
+        else:
+            windows.append([name, s, e])
+    extra = {ref: math.floor(reserve * v / spend) for ref, v in adset_daily.items()}
+    return [{"name": n, "start": s.isoformat(), "end": e.isoformat(), "extra": extra} for n, s, e in windows]

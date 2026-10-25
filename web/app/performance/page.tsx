@@ -1,16 +1,49 @@
 "use client";
 import Link from "next/link";
 import { useState } from "react";
-import { AlertTriangle, Check, FastForward, Orbit, X } from "lucide-react";
+import { AlertTriangle, Check, FastForward, ImagePlus, Orbit, X } from "lucide-react";
 import Bars from "@/components/Bars";
 import Stat from "@/components/Stat";
 import { ClientPicker, useClient } from "@/components/useClient";
 import { fileUrl, money, pct, post, useEvents, usePoll, type Json } from "@/lib/api";
+import { addCreatives, uploadFile } from "@/lib/run";
+import ReportLinks from "@/components/rune/ReportLinks";
 
 const ACTION_LABEL: Record<string, string> = {
   pause_ad: "Paused ad", scale_adset: "Budget change", cut_adset: "Stop ad set",
   refresh_creatives: "Asked for new creatives", launch_creatives: "Launch new creatives",
+  pause_campaign: "Paused everything (budget cap)", fix_disapproved: "Fix a disapproved ad",
 };
+
+/** Fresh client files into a live ad set: built paused, audited, then an approval card above. */
+function AddCreatives({ cid, adsets, onDone }: { cid: string; adsets: Json[]; onDone: () => void }) {
+  const [adset, setAdset] = useState<string>(adsets[0]?.ref ?? "");
+  const [files, setFiles] = useState<File[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const send = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const creatives = [];
+      for (const f of files) creatives.push({ path: await uploadFile(cid, f) });
+      await addCreatives(cid, adset || adsets[0]?.ref, creatives);
+      setFiles([]); setMsg("Built paused and audited: approve the launch in Optimizer actions."); onDone();
+    } catch (e) { setMsg(String((e as Error).message).replace(/^\d+ /, "")); } finally { setBusy(false); }
+  };
+  return (
+    <section className="card flex flex-col gap-2">
+      <div className="label flex items-center gap-1.5"><ImagePlus size={12} /> Add your own creatives</div>
+      <p className="meta">New images or videos run as they are, in the ad set you pick, after you approve.</p>
+      <select className="input" value={adset} onChange={(e) => setAdset(e.target.value)} aria-label="Ad set">
+        {adsets.map((s) => <option key={s.ref} value={s.ref}>{s.name}</option>)}
+      </select>
+      <input type="file" multiple accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime,video/webm,.m4v" className="input"
+        onChange={(e) => setFiles(Array.from(e.target.files ?? []))} />
+      <button className="btn btn-primary" disabled={!files.length || busy} onClick={send}>{busy ? "Uploading…" : `Add ${files.length || ""} creative${files.length === 1 ? "" : "s"}`}</button>
+      {msg && <div className="pill blue !whitespace-normal !text-[12px]">{msg}</div>}
+    </section>
+  );
+}
 
 export default function Performance() {
   const { runs, clientId, setClientId } = useClient();
@@ -49,6 +82,7 @@ export default function Performance() {
         </div>
         <div className="flex items-center gap-2">
           <ClientPicker runs={runs} value={clientId} onChange={setClientId} />
+          {clientId && live && <ReportLinks cid={clientId} />}
           <button className={`btn btn-lime ${busy ? "live-pulse" : ""}`} disabled={!live || busy} onClick={cycle}>
             <FastForward size={15} /> {busy ? "Optimizer agent working…" : "Simulate next 7 days"}
           </button>
@@ -139,6 +173,7 @@ export default function Performance() {
                   })}
                 </div>
               </section>
+              {clientId && <AddCreatives cid={clientId} adsets={(v.package?.blueprint?.campaigns ?? []).flatMap((c: Json) => c.adsets)} onDone={reload} />}
               <section className="card">
                 <div className="label flex items-center gap-1.5"><AlertTriangle size={12} /> Monitor alerts</div>
                 <div className="mt-2 max-h-56 overflow-y-auto">
@@ -167,13 +202,13 @@ export default function Performance() {
               <thead><tr><th>Ad</th><th>Ad set</th><th>Status</th><th>Spend</th><th>CTR</th><th>Conv.</th><th>CPA</th><th>Freq.</th><th>Hook rate</th></tr></thead>
               <tbody>
                 {Object.entries<Json>(perf?.stats ?? {}).sort((a, b) => (a[1].cpa ?? 1e9) - (b[1].cpa ?? 1e9)).map(([ref, s]) => {
-                  const c = creatives[ref], thumb = c && (c.kind === "image" ? c.path : c.thumbnail_path);
+                  const c = creatives[ref.split("@")[0]], thumb = c && (c.kind === "video" ? c.thumbnail_path : c.path);  // x@adset: reused by retargeting
                   return (
                     <tr key={ref}>
                       <td>
                         <div className="flex items-center gap-3">
                           {thumb ? <img src={fileUrl(thumb)} alt="" className="h-11 w-9 rounded-lg object-cover" style={{ background: "var(--bar)" }} /> : <span className="h-11 w-9 rounded-lg" style={{ background: "var(--bar)" }} />}
-                          <div><div className="font-semibold">{c?.ad_copy?.headline ?? ref}</div><div className="meta">{c?.ratio} · {c?.kind}</div></div>
+                          <div><div className="font-semibold">{c?.ad_copy?.headline ?? ref}</div><div className="meta">{c?.ratio} · {c?.kind}{ref.includes("@") ? " · retargeting" : ""}</div></div>
                         </div>
                       </td>
                       <td className="meta">{s.adset_ref}</td>

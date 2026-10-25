@@ -20,11 +20,13 @@ import base64
 import json
 import mimetypes
 import os
+import sys
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Optional, TypeVar
 
-from openai import OpenAI
+from openai import APIConnectionError, APITimeoutError, OpenAI
 from pydantic import BaseModel, ValidationError
 
 from . import claude
@@ -44,6 +46,7 @@ def client() -> OpenAI:
         base_url=os.getenv("FREELLM_BASE_URL", "http://localhost:3001/v1"),
         api_key=os.getenv("FREELLM_API_KEY", "missing"),
         timeout=120,
+        max_retries=0,  # FreeLLMAPI already falls back across providers; our chain moves on to the next one
     )
 
 
@@ -57,7 +60,8 @@ def image_url(path_or_url: str) -> str:
 
 @lru_cache(maxsize=1)
 def ollama() -> OpenAI:
-    return OpenAI(base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"), api_key="ollama", timeout=300)
+    return OpenAI(base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"), api_key="ollama", timeout=300,
+                  max_retries=0)
 
 
 def _openai_chat(c: OpenAI, model: str, system: str, user: str, images: Optional[list[str]]) -> str:
@@ -81,12 +85,30 @@ def providers(alias: str, agent: str) -> list[tuple[str, Callable]]:
     return chain
 
 
+def _caller() -> str:
+    """Module that called into this file (e.g. 'malav.hooks'), so team routing works without agent=."""
+    f = sys._getframe(1)
+    while f and f.f_globals.get("__name__") == __name__:
+        f = f.f_back
+    return f.f_globals.get("__name__", "") if f else ""
+
+
+# provider -> time it may be tried again. A gateway that isn't running costs seconds per call (connection refused
+# is slow on Windows), and a run makes hundreds of calls: skip it for a while instead of re-discovering it each time.
+_DOWN: dict[str, float] = {}
+DOWN_FOR_S = 120
+
+
 def chat(alias: str, system: str, user: str, images: Optional[list[str]] = None, agent: str = "") -> str:
     errors = []
-    for name, call in providers(alias, agent):
+    chain = providers(alias, agent or _caller())
+    up = [(n, c) for n, c in chain if _DOWN.get(n, 0) < time.time()] or chain  # all down: try them anyway
+    for name, call in up:
         try:
             return call(system, user, images)
         except Exception as e:  # next provider; the last one standing answers
+            if isinstance(e, (APIConnectionError, APITimeoutError)):
+                _DOWN[name] = time.time() + DOWN_FOR_S
             errors.append(f"{name}: {e.__class__.__name__}: {str(e)[:120]}")
     raise RuntimeError("all LLM providers failed — " + " | ".join(errors))
 

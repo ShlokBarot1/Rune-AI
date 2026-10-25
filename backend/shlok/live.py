@@ -28,7 +28,8 @@ FATIGUE_FREQUENCY = 3.0
 
 
 class Alert(BaseModel):
-    kind: Literal["no_delivery", "high_cpa", "fatigue", "low_ctr", "winner", "pacing"]
+    kind: Literal["no_delivery", "high_cpa", "fatigue", "low_ctr", "winner", "pacing", "overspend", "cpa_spike",
+                  "budget_cap", "offer_ended", "disapproved"]
     ref: str
     severity: Literal["info", "warn", "critical"]
     message: str
@@ -36,7 +37,8 @@ class Alert(BaseModel):
 
 class Action(BaseModel):
     id: str = Field(default_factory=lambda: new_id("act"))
-    kind: Literal["pause_ad", "scale_adset", "cut_adset", "refresh_creatives", "launch_creatives"]
+    kind: Literal["pause_ad", "scale_adset", "cut_adset", "refresh_creatives", "launch_creatives", "pause_campaign",
+                  "fix_disapproved"]
     ref: str
     reason: str
     risk: Literal["auto", "approval"]
@@ -152,6 +154,97 @@ def monitor(brief: ClientBrief, stats: dict[str, dict]) -> list[Alert]:
     return alerts
 
 
+def anomalies(plan: BudgetPlan, rows: list[InsightRow]) -> list[Alert]:
+    """Money alarms over the whole account, day by day: a day far over plan, the budget nearly gone, a CPA that
+    suddenly doubled. (Meta's campaign spend_cap set at launch is the hard backstop; these catch it earlier.)"""
+    days: dict = {}
+    for r in rows:
+        d = days.setdefault(r.ts.date(), [0.0, 0])
+        d[0] += r.spend
+        d[1] += r.conversions
+    if not days:
+        return []
+    out, order = [], sorted(days)
+    last, planned = order[-1], sum(plan.adset_daily.values()) + plan.testing_reserve
+    if planned and days[last][0] > 1.5 * planned:
+        out.append(Alert(kind="overspend", ref="account", severity="critical",
+                         message=f"{last}: spent {days[last][0]:,.0f}, {days[last][0] / planned:.1f}x the {planned:,.0f}/day plan."))
+    budget, spent = plan.net_total or plan.total, sum(v[0] for v in days.values())
+    if spent >= 0.95 * budget:
+        out.append(Alert(kind="budget_cap", ref="account", severity="critical",
+                         message=f"Spent {spent:,.0f} of the {budget:,.0f} budget: pausing everything before it overruns."))
+    before = [days[d] for d in order[:-1] if days[d][1]]
+    if len(before) >= 3 and days[last][1] >= 1:
+        avg = sum(v[0] for v in before) / sum(v[1] for v in before)
+        today = days[last][0] / days[last][1]
+        if today > 2 * avg:
+            out.append(Alert(kind="cpa_spike", ref="account", severity="warn",
+                             message=f"{last}: cost per result {today:,.0f}, over 2x the {avg:,.0f} average so far."))
+    return out
+
+
+def offer_ended(brief: ClientBrief, pkg: CreativePackage, today) -> list[str]:
+    """Creatives that still advertise an offer that is over (its badge, its code or its headline)."""
+    o = brief.offer
+    if not o or not o.ends or today <= o.ends:
+        return []
+    marks = [m.lower() for m in (o.code, o.headline) if m]
+    return [c.creative_id for c in pkg.creatives
+            if c.template_id == "offer-badge" or any(m in f"{c.ad_copy.primary_text} {c.ad_copy.headline}".lower()
+                                                    for m in marks)]
+
+
+def fetch_review(result: LaunchResult) -> list[tuple[str, str]]:
+    """(creative id, Meta's reason) for every ad Meta disapproved. Live accounts only."""
+    out = []
+    for o in result.objects:
+        if o.kind != "ad" or o.meta_id.startswith("dry_"):
+            continue
+        try:
+            info = meta.api("GET", o.meta_id, params={"fields": "effective_status,ad_review_feedback"})
+        except meta.MetaError:
+            continue
+        if info.get("effective_status") == "DISAPPROVED":
+            fb = info.get("ad_review_feedback") or {}
+            reason = "; ".join(f"{k}: {v}" for part in fb.values() if isinstance(part, dict) for k, v in part.items())
+            out.append((o.local_ref.split(":", 1)[1].split("@")[0], reason or "Meta disapproved the ad"))
+    return out
+
+
+def safety(state: RuneState, brief: ClientBrief, plan: BudgetPlan, pkg: CreativePackage, result: LaunchResult,
+           rows: list[InsightRow], source: str, update: dict) -> tuple[list[Alert], list[Action]]:
+    """Alarms that act on their own, before the optimiser: the budget cap, ended offers, disapproved ads."""
+    cid, alerts, actions = state["client_id"], anomalies(plan, rows), []
+    if any(a.kind == "budget_cap" for a in alerts):
+        launch.set_status(cid, result, "PAUSED", kinds=("campaign",))
+        actions.append(Action(kind="pause_campaign", ref="all", risk="auto", status="applied",
+                              reason="Budget nearly spent: every campaign paused so nothing overruns."))
+    today = max((r.ts.date() for r in rows), default=None) if source == "simulated" else now().date()
+    paused = {a.ref for a in load_actions(cid) if a.kind == "pause_ad" and a.status == "applied"}
+    for cr in offer_ended(brief, pkg, today) if today else []:
+        if cr in paused:
+            continue
+        ads = [o for o in result.objects if o.kind == "ad" and o.local_ref.split(":", 1)[1].split("@")[0] == cr]
+        launch.set_status(cid, LaunchResult(dry_run=result.dry_run, objects=ads), "PAUSED")
+        alerts.append(Alert(kind="offer_ended", ref=cr, severity="info", message=f"The offer ended on {brief.offer.ends}."))
+        actions.append(Action(kind="pause_ad", ref=cr, risk="auto", status="applied",
+                              reason=f"Its offer ended on {brief.offer.ends}; it would advertise a deal that's over."))
+    if source == "meta":
+        waiting = {a.ref for a in load_actions(cid) if a.kind == "fix_disapproved" and a.status == "proposed"}
+        for cr, reason in fetch_review(result):
+            if cr in waiting:
+                continue
+            alerts.append(Alert(kind="disapproved", ref=cr, severity="critical", message=f"Meta disapproved it: {reason}"))
+            actions.append(Action(kind="fix_disapproved", ref=cr, risk="approval", change={"reason": reason},
+                                  reason=f"Meta disapproved it ({reason[:160]}). Approve to relaunch it with rewritten copy."))
+    for a in actions:
+        save_action(cid, a)
+        bus.say(cid, "shlok.monitor", "human" if a.risk == "approval" else "theater", "INFORM", a.model_dump(mode="json"))
+    if actions:
+        update["launch"] = result.model_dump(mode="json")
+    return alerts, actions
+
+
 # ---------- S6 optimizer ----------
 
 def optimize(client_id: str, brief: ClientBrief, plan: BudgetPlan, stats: dict[str, dict],
@@ -232,24 +325,35 @@ def execute(state: RuneState, brief: ClientBrief, plan: BudgetPlan, result: Laun
         bus.say(cid, "shlok.feedback", "malav.hooks", "REQUEST", fb.model_dump())
         new = malav.handle_feedback(state, fb)
         a.status = "applied"
-        if new.creatives:
-            merged = pkg.model_copy(update={"creatives": pkg.creatives + new.creatives})
-            tmp = {**state, "package": merged.model_dump(mode="json")}
-            built = launch.build(brief, merged, plan, [TargetingSpec.model_validate(t) for t in state["targeting"]])
-            tmp["launch"] = built.model_dump(mode="json")
-            blockers = [f for f in deterministic_checks(tmp) if f.severity == "blocker"]
-            if blockers:
-                bus.say(cid, "auditor", "malav", "FIX_PROMPT", {"findings": [b.model_dump() for b in blockers]})
-            else:
-                update |= {"package": tmp["package"], "launch": tmp["launch"]}
-                pending = Action(kind="launch_creatives", ref=a.ref, risk="approval",
-                                 reason=f"{len(new.creatives)} new creatives passed audit; approve to go live.",
-                                 change={"creative_ids": [c.creative_id for c in new.creatives]})
-                save_action(cid, pending)
-                out.append(pending)
+        if pending := stage_creatives(state, brief, plan, pkg, new, a.ref, update):
+            out.append(pending)
     save_action(cid, a)
     bus.say(cid, "shlok.optimizer", "human" if a.risk == "approval" else "theater", "INFORM", a.model_dump(mode="json"))
     return out
+
+
+def stage_creatives(state: RuneState, brief: ClientBrief, plan: BudgetPlan, pkg: CreativePackage,
+                    new: CreativePackage, adset_ref: str, update: dict) -> Action | None:
+    """New creatives (feedback loop or client uploads) -> built PAUSED in Meta, audited, and a launch_creatives
+    approval for the human. Returns that action, or None when nothing new or the audit blocks it."""
+    cid = state["client_id"]
+    if not new.creatives:
+        return None
+    merged = pkg.model_copy(update={"blueprint": new.blueprint, "creatives": pkg.creatives + new.creatives})
+    tmp = {**state, "package": merged.model_dump(mode="json")}
+    built = launch.build(brief, merged, plan, [TargetingSpec.model_validate(t) for t in state["targeting"]])
+    tmp["launch"] = built.model_dump(mode="json")
+    blockers = [f for f in deterministic_checks(tmp) if f.severity == "blocker"]
+    if blockers:
+        bus.say(cid, "auditor", "malav", "FIX_PROMPT", {"findings": [b.model_dump() for b in blockers]})
+        return None
+    update |= {"package": tmp["package"], "launch": tmp["launch"]}
+    pending = Action(kind="launch_creatives", ref=adset_ref, risk="approval",
+                     reason=f"{len(new.creatives)} new creatives passed audit; approve to go live.",
+                     change={"creative_ids": [c.creative_id for c in new.creatives]})
+    save_action(cid, pending)
+    bus.say(cid, "shlok.optimizer", "human", "INFORM", pending.model_dump(mode="json"))
+    return pending
 
 
 # ---------- the loop ----------
@@ -264,23 +368,31 @@ def cycle(state: RuneState, source: Literal["simulated", "meta"] = "simulated", 
     if plan.target_cpa:  # the CPA agreed at the budget gate wins over the raw brief
         brief = brief.model_copy(update={"kpi_targets": brief.kpi_targets.model_copy(update={"target_cpa": plan.target_cpa})})
 
-    rows = simulator.simulate(brief, pkg, plan, days=days, start_day=day) if source == "simulated" else fetch_meta(cid)
+    active = {o.local_ref.split(":", 1)[1] for o in result.objects if o.kind == "ad" and o.status == "ACTIVE"}
+    rows = (simulator.simulate(brief, pkg, plan, days=days, start_day=day, active=active) if source == "simulated"
+            else fetch_meta(cid))
     save_insights(cid, rows)
     stats = ad_stats(load_insights(cid))
-    alerts = monitor(brief, stats)
+    update: dict = {}
+    safe_alerts, safe_actions = safety(state, brief, plan, pkg, result, load_insights(cid), source, update)
+    alerts = safe_alerts + monitor(brief, stats)
     for al in alerts:
         bus.say(cid, "shlok.monitor", "shlok.optimizer", "INFORM", al.model_dump())
-    update: dict = {}
-    actions = optimizer_agent.run(state, brief, plan, result, stats, alerts, load_insights(cid), update)
-    if actions is None:  # no model reachable: the rule-based optimizer acts instead
+    if any(a.kind == "pause_campaign" for a in safe_actions):  # everything is paused: nothing left to optimise
         actions = []
-        for a in optimize(cid, brief, plan, stats, alerts):
-            actions += execute(state, brief, plan, result, stats, a, update)
+    else:
+        actions = optimizer_agent.run(state, brief, plan, result, stats, alerts, load_insights(cid), update)
+        if actions is None:  # no model reachable: the rule-based optimizer acts instead
+            actions = []
+            for a in optimize(cid, brief, plan, stats, alerts):
+                actions += execute(state, brief, plan, result, stats, a, update)
+    actions = safe_actions + actions
     if update.get("launch") is None:
         update["launch"] = result.model_dump(mode="json")
     acts = [a.model_dump(mode="json") for a in actions]
     return {"update": update, "alerts": [a.model_dump() for a in alerts], "actions": acts, "stats": stats,
-            "report": report.daily_report(brief, plan, stats, acts)}
+            "report": report.daily_report(brief, plan, stats, acts, names={
+                **{c.creative_id: c.ad_copy.headline for c in pkg.creatives}, **{s.ref: s.name for s in pkg.blueprint.adsets()}})}
 
 
 def apply_action(state: RuneState, action_id: str, approve: bool) -> dict:
@@ -308,6 +420,23 @@ def apply_action(state: RuneState, action_id: str, approve: bool) -> dict:
         plan.testing_reserve += plan.adset_daily[a.ref]  # freed budget returns to the reserve
         plan.adset_daily[a.ref] = 0
         update["budget_plan"] = plan.model_dump(mode="json")
+    elif a.kind == "fix_disapproved":
+        from malav.hooks import rewrite_copy
+        brief = ClientBrief.model_validate(state["brief"])
+        pkg = CreativePackage.model_validate(state["package"])
+        old = next(c for c in pkg.creatives if c.creative_id == a.ref)
+        copy = rewrite_copy(cid, brief, old.ad_copy, [f"Meta disapproved this ad: {a.change.get('reason', '')}"])
+        fresh = old.model_copy(update={"creative_id": new_id("cr"), "ad_ref": f"{old.ad_ref}_fix", "ad_copy": copy,
+                                       "version": old.version + 1, "parent_id": old.creative_id})
+        bp = pkg.blueprint.model_copy(deep=True)
+        for s_ in bp.adsets():
+            if s_.ref == old.adset_ref:
+                s_.ads.append(next(x for x in s_.ads if x.ref == old.ad_ref).model_copy(update={"ref": fresh.ad_ref}))
+        staged = stage_creatives(state, brief, plan, pkg, CreativePackage(client_id=cid, blueprint=bp, creatives=[fresh]),
+                                 old.adset_ref, update)
+        if not staged:
+            raise ValueError("The rewritten ad didn't pass the audit; edit it in Creative Studio")
+        result = LaunchResult.model_validate(update["launch"])
     elif a.kind == "launch_creatives":
         ads = [objs[f"ad:{c}"] for c in a.change["creative_ids"] if f"ad:{c}" in objs]
         launch.set_status(cid, LaunchResult(dry_run=result.dry_run, objects=ads), "ACTIVE")

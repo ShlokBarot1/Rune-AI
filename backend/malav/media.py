@@ -10,6 +10,7 @@ import base64
 import html
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -26,7 +27,7 @@ from core import llm
 BACKEND = Path(__file__).resolve().parent.parent
 TEMPLATES = BACKEND / "templates"
 MEDIA = BACKEND / "media"
-TEMPLATE_IDS = ["product-hero", "offer-badge", "ugc-caption"]
+TEMPLATE_IDS = ["product-hero", "offer-badge", "ugc-caption", "range-lineup", "range-card"]
 NEGATIVE = "no text, no letters, no words, no logos, no labels, no watermark, no products, no packaging"
 
 
@@ -44,9 +45,27 @@ def resolve(path_or_url: str) -> str:
 
 # ---------- layer 1: background scene ----------
 
-def background(prompt: str, out: Path, w: int, h: int, colors: list[str], seed: int = 1) -> str:
-    """Generate the scene; returns the model/source used. Never raises: last resort is a brand gradient."""
-    full = f"{prompt}. Photorealistic advertising photograph, empty space for a product. {NEGATIVE}."
+WEAR = ("The first attached image is the client's real product. Create a new photorealistic advertising photograph of "
+        "an original AI-generated model wearing exactly this product: keep its colour, cut, fabric, print and logo "
+        "identical. Any other attached images are references for pose, framing, lighting and styling only: do not "
+        "reproduce any person, face, text or logo from them. Keep the upper quarter calm and uncluttered for a headline. "
+        "No added text, no watermark.")
+REFS = (" The attached images are references for mood, lighting, composition and styling only: do not reproduce any "
+        "person, text, logo or product from them.")
+
+
+def background(prompt: str, out: Path, w: int, h: int, colors: list[str], seed: int = 1, product: bool = True,
+               refs: list[str] = (), wear: Optional[str] = None) -> str:
+    """Generate the scene; returns the model/source used. Never raises: last resort is a brand gradient.
+    product=False (no photo to composite, e.g. a university or a service) asks for headline room instead.
+    refs: reference photos for ChatGPT. wear: photo of a wearable product; ChatGPT then puts it on a new AI model
+    (source "chatgpt-model": the product is already in the picture, so the template skips the product layer)."""
+    room = "empty space for a product" if product else "a calm, uncluttered area for a headline"
+    full = f"{prompt.rstrip(' .')}. Photorealistic advertising photograph, {room}. {NEGATIVE}."
+    if wear and _codex(f"{prompt.rstrip(' .')}. {WEAR}", out, w, h, [wear, *refs]):
+        return "chatgpt-model"
+    if _codex(full + (REFS if refs else ""), out, w, h, list(refs)):
+        return "chatgpt"
     try:
         r = llm.client().images.generate(model=llm.model_for("image"), prompt=full, size="1024x1024", n=1)
         d = r.data[0]
@@ -79,6 +98,32 @@ def background(prompt: str, out: Path, w: int, h: int, colors: list[str], seed: 
 
 
 _POLLINATIONS = threading.Lock()
+_CODEX = threading.Semaphore(4)  # ponytail: 4 parallel tested fine on ChatGPT Go (4 images ~2 min); lower if it rate-limits
+
+
+def codex_on() -> bool:
+    return os.getenv("RUNE_IMAGE_CODEX") == "1" and bool(shutil.which("codex"))
+
+
+def _codex(prompt: str, out: Path, w: int, h: int, images: list[str] = ()) -> bool:
+    """ChatGPT-plan image generation via the Codex CLI (`codex exec`, logged in with ChatGPT), ~80 s an image.
+    Opt-in with RUNE_IMAGE_CODEX=1."""
+    if not codex_on():
+        return False
+    shape = "landscape" if w > h else "portrait" if h > w else "square"
+    ask = (f"Generate one {shape} image with your image generation tool: {prompt} "
+           f"Save it as {out.name} in the current directory. Reply only with the saved path.")
+    out.unlink(missing_ok=True)  # codex refuses to overwrite
+    try:
+        with _CODEX:
+            # low effort: the agent only relays one prompt to the image tool (44 s vs ~80 s at the user's "high")
+            subprocess.run([shutil.which("codex"), "exec", "--skip-git-repo-check", "--ephemeral",
+                            "-c", "model_reasoning_effort=low", "-C", str(out.parent),
+                            "--sandbox", "workspace-write", ask, *(["-i", *images] if images else [])],
+                           input=b"", capture_output=True, timeout=600)
+    except Exception:
+        return False
+    return out.exists() and out.stat().st_size > 0
 
 
 def _crop_bottom(path: Path, frac: float) -> None:
@@ -104,8 +149,29 @@ def gradient(out: Path, w: int, h: int, colors: list[str]) -> None:
 
 # ---------- layer 2: real product photo ----------
 
+NOT_A_PRODUCT = re.compile(r"(?<![a-z])(favicon|icon|logo|sprite|apple-touch|android-chrome|placeholder|avatar)s?(?![a-z])",
+                           re.I)  # whole words: "silicone-case.jpg" is a product
+MIN_PRODUCT_SIDE = 400
+
+
+def product_photo_ok(src: str) -> bool:
+    """Is this plausibly a real product photo? Sites hand out favicons, app icons and logos as share images
+    (nike.com's og image is a 192px swoosh), and a logo composited as "the product" makes a product-less ad."""
+    if not src or NOT_A_PRODUCT.search(re.split(r"[\\/]", src.split("?")[0])[-1]):  # the file name only
+        return False
+    try:
+        from io import BytesIO
+        from PIL import Image
+        src = resolve(src)
+        raw = httpx.get(src, timeout=30, follow_redirects=True).content if src.startswith("http") else Path(src).read_bytes()
+        with Image.open(BytesIO(raw)) as im:
+            return min(im.size) >= MIN_PRODUCT_SIDE
+    except Exception:
+        return False
+
 def product_cutout(src: str, out: Path) -> Optional[str]:
-    """Background-removed product PNG (rembg); the original photo if rembg isn't available."""
+    """Background-removed product PNG (rembg); the original photo if rembg isn't available. `out` is a cache:
+    callers name it per source photo."""
     if out.exists():
         return str(out)
     src = resolve(src)
@@ -153,6 +219,32 @@ def contrast(a: str, b: str) -> float:
     return (la + 0.05) / (lb + 0.05)
 
 
+_HUES = [(15, "red"), (40, "orange"), (65, "yellow"), (160, "green"), (195, "teal"), (255, "blue"),
+         (285, "violet"), (330, "magenta"), (360, "red")]
+
+
+def colour_name(hex_: str) -> str:
+    """'#112337' -> 'navy blue': image models ignore hex codes but follow colour words."""
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", hex_ or ""):
+        return hex_
+    import colorsys
+    h, l, s = colorsys.rgb_to_hls(*(int(hex_[i:i + 2], 16) / 255 for i in (1, 3, 5)))
+    deg = h * 360
+    if s < 0.12 or l < 0.06 or l > 0.96:
+        return ("black" if l < 0.12 else "charcoal" if l < 0.3 else "grey" if l < 0.6 else
+                "light grey" if l < 0.9 else "white")
+    hue = next(n for top, n in _HUES if deg < top)
+    if 15 <= deg < 50 and l < 0.35:
+        return "brown"
+    if 20 <= deg < 60 and l > 0.7 and s < 0.6:
+        return "beige"
+    if hue == "blue" and l < 0.3:
+        return "navy blue"
+    shade = "deep" if l < 0.25 else "dark" if l < 0.4 else "pale" if l > 0.8 else "light" if l > 0.65 else ""
+    tone = "vivid" if not shade and s > 0.7 else "muted" if s < 0.35 else ""
+    return " ".join(x for x in (shade or tone, hue) if x)
+
+
 def brand_pair(colors: list[str]) -> tuple[str, str]:
     """(c1, c2): c2 is the CTA button fill, c1 its text. Guarantees readable contrast (WCAG >= 4.5)."""
     valid = [c for c in colors if re.fullmatch(r"#[0-9a-fA-F]{6}", c or "")]
@@ -161,13 +253,40 @@ def brand_pair(colors: list[str]) -> tuple[str, str]:
     return c1, c2 or ("#FFFFFF" if _lum(c1) < 0.4 else "#111318")
 
 
-def cta_label(cta: str) -> str:
-    return cta.replace("_", " ").capitalize()
+def offer_html(offer, currency_symbol: str = "", lang: str = "en") -> str:
+    """The offer block: deal, was -> now price, coupon code, last day. '' without an offer (or once it's over)."""
+    if not offer or (offer.ends and offer.ends < __import__("datetime").date.today()):
+        return ""
+    money = lambda v: f"{currency_symbol}{v:,.0f}"
+    parts = [f'<span class="deal">{html.escape(offer.short())}</span>']
+    if offer.was_price and offer.now_price and offer.now_price < offer.was_price:
+        parts.append(f"<s>{money(offer.was_price)}</s><b>{money(offer.now_price)}</b>")
+    from core.langs import words
+    code_word, ends_word, _ = words(lang)
+    if offer.code:
+        parts.append(f'<span class="code">{html.escape(code_word)} {html.escape(offer.code)}</span>')
+    if offer.ends:  # English: "Ends 9 Nov"; elsewhere a numeric date reads in every script
+        day = f"{offer.ends.day} {offer.ends:%b}" if lang[:2] == "en" else f"{offer.ends.day}/{offer.ends.month}"
+        parts.append(f'<span class="ends">{html.escape(ends_word)} {day}</span>')
+    return "".join(parts)
+
+
+def cta_label(cta: str, lang: str = "en") -> str:
+    from core.langs import words
+    return words(lang)[2].get(cta) or cta.replace("_", " ").capitalize()
 
 
 def fill_template(template_id: str, ratio: str, w: int, h: int, *, bg: str, product: Optional[str], headline: str,
                   sub: str, cta: str, colors: list[str], font: str, logo: Optional[str], brand_name: str,
-                  caption: str = "", show_cta: bool = True) -> str:
+                  caption: str = "", show_cta: bool = True, products: list[str] = (), tags: list[str] = (),
+                  offer: str = "", lang: str = "en", stars: str = "") -> str:
+    """products: cut-outs for the range line-up (the middle one drawn tallest); tags: short benefit chips;
+    offer: offer_html(); lang: script font + text direction; stars: a REAL rating line, never invented."""
+    from core import langs
+    script = langs.lang(lang)
+    families = list(dict.fromkeys(f for f in (font or "Inter", script.font) if f))
+    font_link = ('<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
+                 + "&".join(f"family={quote(f)}:wght@400;500;700;800;900" for f in families) + '&display=block">')
     g = layout(ratio, w, h)
     c1, c2 = brand_pair(colors)
     logo_html = (f'<img class="logo" src="{Path(resolve(logo)).as_uri() if not logo.startswith("http") else logo}">'
@@ -178,9 +297,15 @@ def fill_template(template_id: str, ratio: str, w: int, h: int, *, bg: str, prod
             "BG": Path(bg).as_uri(), "PRODUCT": Path(product).as_uri() if product else "",
             "PROD_CLASS": g["PROD_CLASS"] + ("" if product else " hide"),
             "LOGO": logo_html, "HEADLINE": html.escape(headline), "SUB": html.escape(sub),
-            "BADGE_CLASS": "" if sub else "hide", "CTA": html.escape(cta_label(cta)),
+            "BADGE_CLASS": "" if sub else "hide", "CTA": html.escape(cta_label(cta, lang)),
             "CTA_CLASS": "" if show_cta else "hide",
-            "CAPTION": f"<span>{html.escape(caption)}</span>" if caption else ""}
+            "CAPTION": f"<span>{html.escape(caption)}</span>" if caption else "",
+            "PRODUCTS": "".join(f'<img class="{"mid" if i == len(products) // 2 else ""}" src="{Path(p).as_uri()}">'
+                                for i, p in enumerate(products)),
+            "TAGS": "".join(f"<span>{html.escape(t)}</span>" for t in tags),
+            "FONT_LINK": font_link, "FONT2": html.escape(script.font), "DIR": "rtl" if script.rtl else "ltr",
+            "OFFER": offer, "STARS": html.escape(stars),
+            "RANGE_CLASS": "many" if len(products) > 3 else ""}
     return Template((TEMPLATES / f"{template_id}.html").read_text(encoding="utf-8")).safe_substitute(vals)
 
 
@@ -199,6 +324,10 @@ class Renderer:
         page = self._browser.new_page(viewport={"width": w, "height": h})
         try:
             page.goto(src.as_uri(), wait_until="load")
+            try:
+                page.evaluate("document.fonts.ready.then(() => true)")
+            except Exception:
+                pass
             page.screenshot(path=str(out), clip={"x": 0, "y": 0, "width": w, "height": h})
         finally:
             page.close()
@@ -236,12 +365,12 @@ def media_duration(path: Path) -> float:
     return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)) if m else 0.0
 
 
-def voiceover(text: str, out: Path, lang_geo: str = "en-IN") -> Optional[float]:
-    """Edge-TTS (free, no key). Returns the clip length, or None when TTS is unavailable."""
-    voices = {"en-IN": "en-IN-NeerjaNeural", "en-US": "en-US-AriaNeural", "en-GB": "en-GB-SoniaNeural"}
+def voiceover(text: str, out: Path, voice: str = "en-IN-NeerjaNeural") -> Optional[float]:
+    """Edge-TTS (free, no key) in `voice` (core.langs.voice). Returns the clip length, or None when TTS is
+    unavailable."""
     try:
         import edge_tts
-        save = lambda: asyncio.run(edge_tts.Communicate(text, voices.get(lang_geo, "en-US-AriaNeural")).save(str(out)))
+        save = lambda: asyncio.run(edge_tts.Communicate(text, voice).save(str(out)))
         with ThreadPoolExecutor(1) as ex:  # own thread: Playwright's sync API keeps an event loop on this one
             ex.submit(save).result(timeout=60)
         return media_duration(out) or None
@@ -249,7 +378,10 @@ def voiceover(text: str, out: Path, lang_geo: str = "en-IN") -> Optional[float]:
         return None
 
 
-def captions(text: str, n_words: int = 6) -> list[str]:
+def captions(text: str, n_words: int = 6, lang: str = "en") -> list[str]:
+    from core.langs import NO_SPACES
+    if lang in NO_SPACES or (" " not in text.strip() and len(text) > 20):  # Japanese, Chinese, Thai: by characters
+        return [text[i:i + 14] for i in range(0, len(text), 14)] or [text]
     words = text.split()
     return [" ".join(words[i:i + n_words]) for i in range(0, len(words), n_words)] or [text]
 

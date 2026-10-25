@@ -6,18 +6,20 @@ Every finding names its owner so the fix prompt goes to the right agent.
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from pathlib import Path
 
 from pydantic import BaseModel
 
-from core import bus, llm, skills
+from core import bus, compliance, llm, skills
 from core.schemas import (RATIO_SIZES, AuditReport, BudgetPlan, ClientBrief, CreativePackage,
                           Finding, FixPrompt, LaunchResult, TargetingSpec)
 from core.state import RuneState
 
 DIMENSIONS = ["brief", "strategy", "creative", "copy_policy", "budget", "targeting", "technical"]
 PENALTY = {"blocker": 40, "major": 15, "minor": 5}
+BACKEND = Path(__file__).resolve().parent.parent  # creative paths are relative to backend/, whatever the cwd
 
 
 def deterministic_checks(state: RuneState) -> list[Finding]:
@@ -30,7 +32,7 @@ def deterministic_checks(state: RuneState) -> list[Finding]:
     add = lambda sev, dim, ref, owner, msg: out.append(Finding(severity=sev, dimension=dim, object_ref=ref, owner=owner, message=msg))
 
     # brief: deliverables honoured
-    images = [c for c in pkg.creatives if c.kind == "image"]
+    images = [c for c in pkg.creatives if c.kind in ("image", "carousel")]  # a carousel is an image ad
     videos = [c for c in pkg.creatives if c.kind == "video"]
     if len({c.ad_ref for c in images}) < brief.deliverables.n_images:
         add("major", "brief", "package", "malav", f"Client asked for {brief.deliverables.n_images} image ads, package has {len({c.ad_ref for c in images})}.")
@@ -41,10 +43,16 @@ def deterministic_checks(state: RuneState) -> list[Finding]:
 
     # creative + copy
     for c in pkg.creatives:
-        if (c.width, c.height) != RATIO_SIZES[c.ratio]:
-            add("major", "creative", c.creative_id, "malav", f"{c.ratio} must be {RATIO_SIZES[c.ratio]}, got {(c.width, c.height)}.")
-        if not Path(c.path).exists():
+        rw, rh = RATIO_SIZES[c.ratio]  # client uploads keep their own resolution; only the shape must match
+        if not c.height or abs(c.width / c.height / (rw / rh) - 1) > 0.03:
+            add("major", "creative", c.creative_id, "malav", f"{c.ratio} must be {rw}x{rh}-shaped, got {(c.width, c.height)}.")
+        if not (BACKEND / c.path).exists():
             add("blocker", "creative", c.creative_id, "malav", f"Asset file missing: {c.path}")
+        if c.kind == "carousel" and not 2 <= len(c.cards) <= 10:
+            add("blocker", "creative", c.creative_id, "malav", f"A carousel needs 2-10 cards, has {len(c.cards)}.")
+        for card in c.cards:
+            if not (BACKEND / card.path).exists():
+                add("blocker", "creative", c.creative_id, "malav", f"Carousel card missing: {card.path}")
         if not c.qa.passed:
             add("major", "creative", c.creative_id, "malav", f"Creative QA did not pass: {c.qa.notes}")
         if len(c.ad_copy.headline) > 40:
@@ -70,6 +78,24 @@ def deterministic_checks(state: RuneState) -> list[Finding]:
             add("blocker", "budget", s.ref, "shlok", "Ad set has no budget.")
         if s.ref not in targeting:
             add("blocker", "targeting", s.ref, "shlok", "Ad set has no targeting spec.")
+
+    # policy: restricted categories (core.compliance)
+    for r in compliance.rules_for(brief):
+        if r.action == "blocked":
+            add("blocker", "copy_policy", "brief", "human", f"Meta doesn't allow ads for {r.category}. {r.copy_rules}")
+        elif r.action == "authorization" and r.category not in brief.authorized:
+            add("blocker", "copy_policy", "brief", "human", f"{r.category} needs Meta's written authorisation: get it, then "
+                                                           "tick it under Brief → Restricted categories.")
+    # offer + local
+    if brief.offer and brief.offer.ends:
+        if brief.offer.ends < brief.budget.start:
+            add("major", "brief", "brief", "human", f"The offer ends {brief.offer.ends}, before the ads start "
+                                                    f"({brief.budget.start}). Update or remove it.")
+        elif brief.offer.ends < brief.budget.end:
+            add("minor", "brief", "brief", "shlok", f"The offer ends {brief.offer.ends}: its ads pause automatically then.")
+    for loc in brief.locations:
+        if loc.lat is None and not loc.pincodes and not loc.city:
+            add("major", "targeting", "brief", "human", f"{loc.name}: no address, city or postcode to target. Add one.")
 
     # technical: everything built and paused before go-live
     built = {o.local_ref for o in launch.objects}
@@ -107,6 +133,11 @@ def llm_review(state: RuneState) -> list[Finding]:
         return []
 
 
+def refs(object_ref: str) -> list[str]:
+    """The ids in a finding's ref. The LLM review writes "cr_a, cr_b" or "cr_a – primary_text"; fixers match exact ids."""
+    return re.findall(r"\b(?:cr|ad|as|c)_\w+", object_ref) or [object_ref.strip()]
+
+
 def audit(state: RuneState) -> AuditReport:
     cid = state["client_id"]
     bus.log(cid, "auditor", "Auditing brief, creatives, budget, targeting and Meta build")
@@ -120,10 +151,10 @@ def audit(state: RuneState) -> AuditReport:
                 else "PASS_WITH_NOTES" if findings else "PASS")
 
     by_owner: dict[str, list[Finding]] = defaultdict(list)
-    for f in findings:
-        if f.severity != "minor" or decision == "FAIL":
+    for f in findings:  # "human" findings (authorisation, an offer that's over) go to the go-live card, not to agents
+        if f.owner != "human" and (f.severity != "minor" or decision == "FAIL"):
             by_owner[f.owner].append(f)
-    fixes = [FixPrompt(owner=o, object_refs=[f.object_ref for f in fs],
+    fixes = [FixPrompt(owner=o, object_refs=[r for f in fs for r in refs(f.object_ref)],
                        prompt="Fix these audit findings:\n" + "\n".join(f"- [{f.severity}] {f.object_ref}: {f.message}" for f in fs))
              for o, fs in by_owner.items()]
     report = AuditReport(decision=decision, scores=scores, findings=findings, fix_prompts=fixes)

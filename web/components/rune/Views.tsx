@@ -7,6 +7,8 @@ const cta = (c?: string) => (c ? c.replace(/_/g, " ").toLowerCase().replace(/^./
 const Empty = ({ text }: { text: string }) => <div className="tile py-10 text-center text-[13px]" style={{ color: "var(--text-2)" }}>{text}</div>;
 
 /* ---------------- brief ---------------- */
+const FOCUS_LABEL: Record<string, string> = { product: "your products", range: "your range (line-ups + carousels)", photos: "your own photos", brand: "general brand scenes" };
+
 export function BriefCard({ b, live = false, onEdit }: { b: Json | null; live?: boolean; onEdit?: () => void }) {
   if (!b) return <Empty text="The brief fills in here as the intake agent reads the site." />;
   const p0 = b.products?.[0];
@@ -38,6 +40,21 @@ export function BriefCard({ b, live = false, onEdit }: { b: Json | null; live?: 
             <span key={c} className="h-7 w-7 rounded-full border border-white shadow" style={{ background: c }} title={c} />
           ))}
           {b.brand?.tone && <span className="pill ml-1">{b.brand.tone}</span>}
+        </div>
+      )}
+      {b.creative_focus && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="pill dark">Ads show: {FOCUS_LABEL[b.creative_focus] ?? b.creative_focus}</span>
+          {b.creative_focus === "photos" && (b.photos ?? []).slice(0, 6).map((p: string) => (
+            <img key={p} src={p.startsWith("http") ? p : fileUrl(p)} alt="" className="h-9 w-9 rounded-lg object-cover" />
+          ))}
+          {b.offer && <span className="pill lime">Offer: {b.offer.headline}{b.offer.code ? ` · ${b.offer.code}` : ""}{b.offer.ends ? ` · until ${b.offer.ends}` : ""}</span>}
+          {(b.languages ?? []).length > 0 && !(b.languages.length === 1 && b.languages[0] === "en") && <span className="pill">Languages: {b.languages.join(", ")}</span>}
+          {!!b.locations?.length && <span className="pill">Local: {b.locations.map((l: Json) => `${l.name} (${l.radius_km} km)`).join(", ")}</span>}
+          {b.catalog_ads && <span className="pill">+ catalog ads</span>}
+          {(b.restricted ?? []).map((r: string) => (
+            <span key={r} className={`pill ${(b.authorized ?? []).includes(r) ? "ok" : "warn"}`}>{r}{(b.authorized ?? []).includes(r) ? " · authorised" : ""}</span>
+          ))}
         </div>
       )}
       {!!b.products?.length && (
@@ -100,10 +117,10 @@ export function ResearchView({ r }: { r: Json | null }) {
               <div key={q} className="bubble light-left !max-w-full flex gap-2"><Quote size={13} className="mt-0.5 shrink-0 opacity-50" />{q}</div>
             ))}
             <div className="flex flex-wrap gap-1.5">
-              {p.pains?.slice(0, 3).map((x: string) => <span key={x} className="pill bad">{x}</span>)}
-              {p.desires?.slice(0, 3).map((x: string) => <span key={x} className="pill ok">{x}</span>)}
+              {p.pains?.slice(0, 3).map((x: string) => <span key={x} className="pill bad !whitespace-normal">{x}</span>)}
+              {p.desires?.slice(0, 3).map((x: string) => <span key={x} className="pill ok !whitespace-normal">{x}</span>)}
             </div>
-            <div className="flex flex-wrap gap-1.5">{p.interests?.slice(0, 5).map((x: string) => <span key={x} className="pill blue">{x}</span>)}</div>
+            <div className="flex flex-wrap gap-1.5">{p.interests?.slice(0, 5).map((x: string) => <span key={x} className="pill blue !whitespace-normal">{x}</span>)}</div>
             {!!p.evidence?.length && (
               <div className="flex flex-wrap gap-2">
                 {p.evidence.slice(0, 3).map((u: string) => (
@@ -140,7 +157,8 @@ export function ResearchView({ r }: { r: Json | null }) {
 }
 
 /* ---------------- strategy ---------------- */
-export function StrategyView({ bp, negotiation }: { bp: Json | null; negotiation: React.ReactNode }) {
+/** Structured blueprint only: campaign, ad sets, persona, angle, ads. The agents' prose stays in the Theater. */
+export function StrategyView({ bp }: { bp: Json | null }) {
   if (!bp) return <Empty text="The strategy agent is designing the campaign and negotiating budget with shlok.budget." />;
   const all: Json[] = bp.campaigns?.flatMap((c: Json) => c.adsets) ?? [];
   const nAds = all.reduce((n, s) => n + (s.ads?.length ?? 0), 0);
@@ -160,21 +178,19 @@ export function StrategyView({ bp, negotiation }: { bp: Json | null; negotiation
           </div>
         </section>
       ))}
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-        <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {all.map((s: Json, i: number) => {
-            const [why, extra] = String(s.rationale ?? "").split(/Also test as hooks:/);
+            const extra = String(s.rationale ?? "").split(/Also test as hooks:/)[1];
             return (
-              <section key={s.ref} className="card flex flex-col gap-3">
+              <section key={s.ref} className="card flex min-w-0 flex-col gap-3">
                 <div className="flex items-center justify-between gap-2">
                   <span className="pill lime">Ad set {i + 1}</span><span className="pill blue">{s.persona_ref.replace(/^p_/, "")}</span>
                 </div>
                 <div>
                   <div className="label">Angle</div>
-                  <div className="text-[17px] font-semibold leading-snug">{s.angle}</div>
+                  <div className="line-clamp-3 text-[17px] font-semibold leading-snug" title={s.angle}>{s.angle}</div>
                 </div>
-                {why?.trim() && <p className="text-[12.5px] leading-relaxed" style={{ color: "var(--text-2)" }}>{why.trim()}</p>}
-                {extra && <div className="flex flex-wrap items-center gap-1.5"><span className="label">Also tests</span>{extra.split(/[.;]/).map((x) => x.trim()).filter(Boolean).map((x) => <span key={x} className="pill">{x}</span>)}</div>}
+                {extra && <div className="flex flex-wrap items-center gap-1.5"><span className="label">Also tests</span>{extra.split(/[.;]/).map((x) => x.trim()).filter(Boolean).map((x) => <span key={x} className="pill !whitespace-normal">{x}</span>)}</div>}
                 <div className="mt-auto grid grid-cols-2 gap-2">
                   {s.ads?.map((a: Json, j: number) => (
                     <div key={a.ref} className="tile flex items-center gap-2 !p-2.5">
@@ -186,12 +202,6 @@ export function StrategyView({ bp, negotiation }: { bp: Json | null; negotiation
               </section>
             );
           })}
-        </div>
-        <section className="card self-start">
-          <div className="label">Negotiation · strategy ⇄ budget</div>
-          <div className="mt-3 flex flex-col gap-2">{negotiation}</div>
-          {bp.rationale && <p className="mt-4 border-t pt-3 text-[12px] leading-relaxed" style={{ color: "var(--text-2)", borderColor: "var(--line)" }}>{bp.rationale}</p>}
-        </section>
       </div>
     </div>
   );

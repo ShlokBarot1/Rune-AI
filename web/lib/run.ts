@@ -1,24 +1,31 @@
 "use client";
 import { useEffect, useState } from "react";
-import { post, usePoll, type Json } from "@/lib/api";
+import { API, authHeaders, post, usePoll, type Json } from "@/lib/api";
 
 /** Save a human edit of Malav-owned state (brief / hooks / package) while the run waits at a gate. */
 export const editState = (cid: string, key: "brief" | "hooks" | "package", value: Json) =>
   post(`/malav/runs/${cid}/edit`, { key, value });
 
-/** Upload an image (logo / product photo); resolves to its media path for the brief. */
-export async function uploadImage(cid: string, file: File): Promise<string> {
-  const data = await new Promise<string>((ok, bad) => {
-    const r = new FileReader();
-    r.onload = () => ok(String(r.result));
-    r.onerror = bad;
-    r.readAsDataURL(file);
-  });
-  return (await post(`/malav/runs/${cid}/upload`, { filename: file.name, data })).path;
+/** Upload a file (logo, product photo, or the client's own ad image/video), streamed as the raw body.
+ *  Resolves to its media path for the brief / intake. */
+export async function uploadFile(cid: string, file: File): Promise<string> {
+  const r = await fetch(`${API}/malav/runs/${cid}/upload?filename=${encodeURIComponent(file.name)}`,
+    { method: "POST", body: file, headers: authHeaders() });
+  if (!r.ok) throw new Error(((await r.json().catch(() => null))?.detail as string) ?? `Upload failed (${r.status})`);
+  return (await r.json()).path;
 }
+export const uploadImage = uploadFile;
+
+/** The client's own creatives go live mid-flight: new ads in an ad set, pending the human's launch approval. */
+export const addCreatives = (cid: string, adsetRef: string, creatives: Json[]) =>
+  post(`/malav/runs/${cid}/creatives`, { adset_ref: adsetRef, creatives });
 
 /** Send a change request to the waiting gate (the suggestion evaluator + owning agent apply it). */
 export const requestChanges = (cid: string, comment: string) => post(`/runs/${cid}/resume`, { action: "changes", comment });
+
+/** Stop the running stage / rerun the current stage after a stop. */
+export const stopRun = (cid: string) => post(`/runs/${cid}/stop`, {});
+export const continueRun = (cid: string) => post(`/runs/${cid}/continue`, {});
 
 /** Reopen an earlier stage's approval gate; every stage after it reruns once approved. No-op if already there. */
 export const rewindTo = (cid: string, stage: string) => post(`/malav/runs/${cid}/rewind`, { stage });
@@ -69,8 +76,8 @@ export function stageStates(snap: Json | null): Record<StageId, StageState> {
   for (const s of STAGES) out[s.id] = v[s.done] != null && v[s.done] !== false ? "done" : "todo";
   if (current) {
     const gateOnly = snap?.next?.[0]?.endsWith("__gate");
-    out[current] = waiting ? "waiting" : gateOnly ? "done" : "running";
-    if (waiting && current) out[current] = "waiting";
+    // not running and not waiting = stopped (or the API restarted mid-stage): show it as not done
+    out[current] = waiting ? "waiting" : gateOnly ? "done" : snap?.running ? "running" : "todo";
   }
   if (v.live) out.go_live = "done";
   return out;
@@ -108,6 +115,16 @@ export function agentShort(sender: string): string {
   const last = parts[parts.length - 1];
   return last.slice(0, 2).toUpperCase();
 }
+const STAGE_OF: [RegExp, string][] = [
+  [/^malav\.intake/, "Brief"], [/^malav\.research/, "Research"], [/^malav\.strategy/, "Strategy"], [/^malav\.hooks/, "Hooks & copy"],
+  [/^malav\.(planner|generator|qa|packager|fixer)/, "Creatives"], [/^shlok\.budget/, "Budget"], [/^shlok\.targeting/, "Targeting"],
+  [/^shlok\.launch/, "Meta build"], [/^auditor/, "Audit"], [/^shlok\./, "Live performance"],
+];
+/** The pipeline stage an agent works in, so the feed groups a stage's agents (e.g. 3 researchers) together. */
+export function stageLabel(sender: string): string {
+  return STAGE_OF.find(([re]) => re.test(sender))?.[1] ?? agentName(sender);
+}
+
 export function agentName(sender: string): string {
   const parts = sender.split(".");
   return parts.length > 1 ? parts.slice(1).join(" · ") : sender;

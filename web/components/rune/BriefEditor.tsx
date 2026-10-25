@@ -7,18 +7,25 @@ import { editState, reopenNote, uploadImage } from "@/lib/run";
 const GOALS = ["sales", "leads", "traffic", "awareness", "engagement", "app_installs"];
 const RATIOS = ["1:1", "4:5", "9:16", "1.91:1"];
 const SPECIAL = ["none", "credit", "employment", "housing", "social_issues"];
+const FOCUS: [string, string][] = [["product", "One product per ad"], ["range", "Our range"], ["photos", "Our photos"], ["brand", "General scenes"]];
+const FOCUS_HINT: Record<string, string> = {
+  product: "Each ad set shows one of the products below, from its real photo (add one per product).",
+  range: "Several products per ad with benefit tags, plus carousels with a card per product. Needs photos of at least 2 products.",
+  photos: "Your photos of the place, team, work or app are the ad image. Nothing is generated.",
+  brand: "AI-made lifestyle or category scenes, no product shot: for brand, launch or awareness campaigns.",
+};
 const img = (p?: string) => (!p ? "" : p.startsWith("http") ? p : fileUrl(p));
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <label className="flex flex-col gap-1.5"><span className="label">{label}</span>{children}</label>;
 }
 
-function UploadButton({ cid, onDone, label }: { cid: string; onDone: (path: string) => void; label: string }) {
+function UploadButton({ cid, onDone, label, accept = "image/png,image/jpeg,image/webp" }: { cid: string; onDone: (path: string) => void; label: string; accept?: string }) {
   const ref = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   return (
     <>
-      <input ref={ref} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={async (e) => {
+      <input ref={ref} type="file" accept={accept} hidden onChange={async (e) => {
         const f = e.target.files?.[0];
         if (!f) return;
         setBusy(true);
@@ -78,6 +85,26 @@ export default function BriefEditor({ cid, brief, atGate = true, onSaved, onCanc
         </div>
       </div>
 
+      <div className="tile flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="label mr-1">What the ads show</span>
+          <div className="seg">
+            {FOCUS.map(([k, label]) => <button key={k} className={b.creative_focus === k ? "on" : ""} onClick={() => set("creative_focus", k)}>{label}</button>)}
+          </div>
+        </div>
+        <div className="meta">{FOCUS_HINT[b.creative_focus ?? "product"]}</div>
+        {b.creative_focus === "photos" && (
+          <div className="flex flex-wrap items-center gap-2">
+            {(b.photos ?? []).map((p: string, i: number) => (
+              <button key={p} className="relative" title="Remove" onClick={() => set("photos", b.photos.filter((_: string, j: number) => j !== i))}>
+                <img src={img(p)} alt="" className="h-14 w-14 rounded-xl object-cover" /><X size={12} className="absolute right-1 top-1 rounded-full bg-white" />
+              </button>
+            ))}
+            <UploadButton cid={cid} label="Add photo" onDone={(path) => set("photos", [...(b.photos ?? []), path])} />
+          </div>
+        )}
+      </div>
+
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between">
           <span className="label">Products</span>
@@ -101,6 +128,70 @@ export default function BriefEditor({ cid, brief, atGate = true, onSaved, onCanc
         ))}
       </div>
 
+      <div className="tile flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <span className="label">Offer running now</span>
+          {b.offer ? <button className="btn btn-ghost !h-8 !text-[12px]" onClick={() => set("offer", null)}>Remove offer</button>
+            : <button className="btn btn-ghost !h-8 !text-[12px]" onClick={() => set("offer", { headline: "20% off", kind: "percent_off", code: "" })}><Plus size={13} /> Add an offer</button>}
+        </div>
+        {b.offer && (
+          <div className="grid gap-2 sm:grid-cols-3">
+            <Field label="Headline (20 chars reads best)"><input className="input" value={b.offer.headline ?? ""} onChange={(e) => set("offer.headline", e.target.value)} /></Field>
+            <Field label="Coupon code"><input className="input" value={b.offer.code ?? ""} onChange={(e) => set("offer.code", e.target.value.toUpperCase())} /></Field>
+            <Field label="Last day"><input className="input" type="date" value={b.offer.ends ?? ""} onChange={(e) => set("offer.ends", e.target.value || null)} /></Field>
+            <Field label="Was price"><input className="input" type="number" value={b.offer.was_price ?? ""} onChange={(e) => set("offer.was_price", e.target.value ? Number(e.target.value) : null)} /></Field>
+            <Field label="Now price"><input className="input" type="number" value={b.offer.now_price ?? ""} onChange={(e) => set("offer.now_price", e.target.value ? Number(e.target.value) : null)} /></Field>
+            <Field label="Terms"><input className="input" placeholder="on orders above ₹999" value={b.offer.terms ?? ""} onChange={(e) => set("offer.terms", e.target.value)} /></Field>
+          </div>
+        )}
+        <div className="meta">Shown on the ads and in the copy; its ads pause by themselves after the last day.</div>
+      </div>
+
+      <div className="tile flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <span className="label">Locations (local business)</span>
+          <button className="btn btn-ghost !h-8 !text-[12px]" onClick={() => set("locations", [...(b.locations ?? []), { name: "Main store", address: "", city: "", radius_km: 5, pincodes: [] }])}><Plus size={13} /> Add location</button>
+        </div>
+        {(b.locations ?? []).map((l: Json, i: number) => (
+          <div key={i} className="grid gap-2 sm:grid-cols-[1fr_2fr_1fr_90px_1fr_auto]">
+            <input className="input" placeholder="Name" value={l.name} onChange={(e) => set(`locations.${i}.name`, e.target.value)} />
+            <input className="input" placeholder="Address" value={l.address ?? ""} onChange={(e) => { set(`locations.${i}.address`, e.target.value); set(`locations.${i}.lat`, null); set(`locations.${i}.lng`, null); }} />
+            <input className="input" placeholder="City" value={l.city ?? ""} onChange={(e) => set(`locations.${i}.city`, e.target.value)} />
+            <input className="input" type="number" min={1} max={80} title="Radius km" value={l.radius_km ?? 5} onChange={(e) => set(`locations.${i}.radius_km`, Number(e.target.value))} />
+            <input className="input" placeholder="Pincodes, comma separated" value={(l.pincodes ?? []).join(", ")} onChange={(e) => set(`locations.${i}.pincodes`, list(e.target.value))} />
+            <button className="circle sm" onClick={() => set("locations", b.locations.filter((_: Json, j: number) => j !== i))} aria-label="Remove"><Trash2 size={13} /></button>
+          </div>
+        ))}
+        <div className="meta">{b.locations?.length ? "Ads reach people around these places (km radius), not the whole country. Addresses are placed on the map when you save." : "Online-only businesses leave this empty."}</div>
+      </div>
+
+      <div className="tile flex flex-col gap-2">
+        <span className="label">Audiences</span>
+        <div className="flex flex-wrap items-center gap-4 text-[13px]">
+          <label className="flex items-center gap-1.5"><input type="checkbox" checked={b.audiences?.retarget ?? true} onChange={(e) => set("audiences.retarget", e.target.checked)} /> Retarget site visitors &amp; engagers</label>
+          <label className="flex items-center gap-1.5"><input type="checkbox" checked={b.audiences?.exclude_buyers ?? true} onChange={(e) => set("audiences.exclude_buyers", e.target.checked)} /> Keep existing customers out of prospecting</label>
+          <label className="flex items-center gap-1.5">Lookalike <input className="input !w-16 !py-1" type="number" min={0} max={10} value={b.audiences?.lookalike_pct ?? 1} onChange={(e) => set("audiences.lookalike_pct", Number(e.target.value))} /> %</label>
+          <label className="flex items-center gap-1.5"><input type="checkbox" checked={!!b.catalog_ads} onChange={(e) => set("catalog_ads", e.target.checked)} /> Catalog ads over every product</label>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <UploadButton cid={cid} accept=".csv,text/csv" label={b.audiences?.customer_list ? "Replace customer list" : "Upload customer list (CSV)"} onDone={(path) => set("audiences.customer_list", path)} />
+          <span className="meta">{b.audiences?.customer_list ? `${b.audiences.customer_list.split("/").pop()}: emails and phones are hashed before they reach Meta` : "Emails / phone numbers: excluded from prospecting and the seed of the lookalike"}</span>
+        </div>
+      </div>
+
+      {!!b.restricted?.length && (
+        <div className="tile flex flex-col gap-2" style={{ borderColor: "var(--warn, #e6a700)" }}>
+          <span className="label">Restricted categories</span>
+          {b.restricted.map((r: string) => (
+            <label key={r} className="flex items-center gap-2 text-[13px]">
+              <input type="checkbox" checked={(b.authorized ?? []).includes(r)}
+                onChange={(e) => set("authorized", e.target.checked ? [...(b.authorized ?? []), r] : (b.authorized ?? []).filter((x: string) => x !== r))} />
+              {r}: we have Meta&apos;s written authorisation (if it needs one)
+            </label>
+          ))}
+        </div>
+      )}
+
       <div className="grid gap-3 sm:grid-cols-3">
         <Field label="Goal"><select className="input" value={b.goal} onChange={(e) => set("goal", e.target.value)}>{GOALS.map((g) => <option key={g}>{g}</option>)}</select></Field>
         <Field label="Budget total"><input className="input" type="number" value={b.budget?.total ?? ""} onChange={(e) => set("budget.total", Number(e.target.value))} /></Field>
@@ -108,6 +199,7 @@ export default function BriefEditor({ cid, brief, atGate = true, onSaved, onCanc
         <Field label="Start"><input className="input" type="date" value={b.budget?.start ?? ""} onChange={(e) => set("budget.start", e.target.value)} /></Field>
         <Field label="End"><input className="input" type="date" value={b.budget?.end ?? ""} onChange={(e) => set("budget.end", e.target.value)} /></Field>
         <Field label="Countries (ISO)"><input className="input" value={(b.geo ?? []).join(", ")} onChange={(e) => set("geo", list(e.target.value.toUpperCase()))} /></Field>
+        <Field label="Ad languages (ISO, e.g. hi, en)"><input className="input" value={(b.languages ?? []).join(", ")} onChange={(e) => set("languages", list(e.target.value.toLowerCase()))} /></Field>
         <Field label="Image ads"><input className="input" type="number" min={0} value={b.deliverables?.n_images ?? 0} onChange={(e) => set("deliverables.n_images", Number(e.target.value))} /></Field>
         <Field label="Video ads"><input className="input" type="number" min={0} value={b.deliverables?.n_videos ?? 0} onChange={(e) => set("deliverables.n_videos", Number(e.target.value))} /></Field>
         <Field label="Target CPA"><input className="input" type="number" value={b.kpi_targets?.target_cpa ?? ""} onChange={(e) => set("kpi_targets.target_cpa", e.target.value ? Number(e.target.value) : null)} /></Field>

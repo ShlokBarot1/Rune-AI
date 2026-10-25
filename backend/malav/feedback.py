@@ -8,12 +8,14 @@ are regenerated as a new version with the prompt as guidance; planned ads missin
 from __future__ import annotations
 
 from core import bus
-from core.schemas import (RATIO_SIZES, AdPlan, ClientBrief, Creative, CreativeFeedback, CreativePackage, FixPrompt,
+from auditor.agent import refs
+from core.schemas import (RATIO_SIZES, AuditReport, AdPlan, ClientBrief, Creative, CreativeFeedback, CreativePackage, FixPrompt,
                           ResearchReport, new_id)
 from core.state import RuneState
+from malav import own
 from malav.common import demo_mode
 from malav.creatives import Job, creative_id, landing_url, pick_template, plan_jobs, produce, write_manifest
-from malav.hooks import HookPlus, _fallback_hooks, fit_copy, hooks_for_adset
+from malav.hooks import HookPlus, _fallback_hooks, fit_copy, hooks_for_adset, rewrite_copy
 
 AGENT = "malav.hooks"
 
@@ -39,6 +41,11 @@ def handle_feedback(state: RuneState, feedback: CreativeFeedback) -> CreativePac
 
     win = feedback.winners[0] if feedback.winners else {}
     winner = next((c for c in mine if c.creative_id == win.get("creative_id")), mine[0])
+    if own.uploads(state):  # the client makes the creatives: ask them for fresh files instead of generating
+        bus.say(cid, AGENT, "human", "INFORM", {
+            "text": f"{adset.name} needs fresh creatives ({feedback.insight}). Upload new variants of your best ad "
+                    f"({winner.ad_ref}) on Live Performance; they launch once you approve.", "adset_ref": adset.ref})
+        return CreativePackage(client_id=pkg.client_id, blueprint=pkg.blueprint, creatives=[])
     hooks = {h["id"]: HookPlus.model_validate(h) for h in state.get("hooks", [])}
     win_text = win.get("hook") or (hooks[winner.hook_id].text if winner.hook_id in hooks else winner.ad_copy.primary_text[:80])
     bus.say(cid, AGENT, "shlok.feedback", "RESPONSE",
@@ -83,7 +90,7 @@ def handle_feedback(state: RuneState, feedback: CreativeFeedback) -> CreativePac
                 "ad_copy": copy, "landing_url": landing_url(brief, j.campaign_ref, j.ad_ref),
                 "version": j.version, "parent_id": j.parent_id, "prompt": note}))
     else:
-        creatives = produce(cid, brief, jobs, hook_map)
+        creatives = produce(cid, brief, jobs, hook_map, pkg.blueprint)
 
     bp = pkg.blueprint.model_copy(deep=True)
     for s in bp.adsets():
@@ -91,6 +98,29 @@ def handle_feedback(state: RuneState, feedback: CreativeFeedback) -> CreativePac
             s.ads.extend(p for p in plans if any(c.ad_ref == p.ref for c in creatives))
     bus.log(cid, AGENT, f"Feedback loop: {len(creatives)} new creatives for {adset.name} (parent {winner.creative_id})")
     return CreativePackage(client_id=pkg.client_id, blueprint=bp, creatives=creatives)
+
+
+def fix_copy(state: RuneState, brief: ClientBrief, pkg: CreativePackage, targets: dict[str, str]) -> set[str]:
+    """Targets whose audit findings are all about copy get rewritten copy (once per ad, every ratio) instead of a
+    new image: regenerating the picture never fixes a sentence. Returns those creative ids. Mutates pkg."""
+    findings = AuditReport.model_validate(state["audit"]).findings if state.get("audit") else []
+    per: dict[str, list] = {}
+    for f in findings:
+        ids = set(refs(f.object_ref))
+        for c in pkg.creatives:
+            if f.owner == "malav" and ids & {c.creative_id, c.ad_ref, c.adset_ref}:
+                per.setdefault(c.creative_id, []).append(f)
+    text_only = {i for i in targets if per.get(i) and all(f.dimension == "copy_policy" for f in per[i])}
+    ads = {c.ad_ref for c in pkg.creatives if c.creative_id in text_only}
+    for ad in ads:
+        group = [c for c in pkg.creatives if c.ad_ref == ad]
+        issues = list(dict.fromkeys(f.message for c in group for f in per.get(c.creative_id, [])))
+        new = rewrite_copy(state["client_id"], brief, group[0].ad_copy, issues)
+        for c in group:
+            c.ad_copy = new
+        bus.log(state["client_id"], "malav.fixer", f"Rewrote the copy of {ad} for the audit ({issues[0][:90]}); "
+                                                   "the images stay as they are")
+    return text_only
 
 
 def apply_fixes(state: RuneState, prompts: list[FixPrompt]) -> dict:
@@ -101,19 +131,31 @@ def apply_fixes(state: RuneState, prompts: list[FixPrompt]) -> dict:
     pkg = CreativePackage.model_validate(state["package"])
     hooks = {h["id"]: HookPlus.model_validate(h) for h in state.get("hooks", [])}
 
-    texts = {h.id: h.text for h in hooks.values()}
+    texts = {} if own.uploads(state) else {h.id: h.text for h in hooks.values()}  # client copy: never prepend a hook
     for c in pkg.creatives:  # copy limits, everywhere
         c.ad_copy = fit_copy(c.ad_copy, texts.get(c.hook_id, c.ad_copy.primary_text[:60]), brief)
 
     targets: dict[str, str] = {}   # creative_id -> instruction
     for p in prompts:
-        refs = set(p.object_refs)
-        hit = [c for c in pkg.creatives if c.creative_id in refs or c.ad_ref in refs or c.adset_ref in refs]
-        if p.owner == "human" and not refs:
+        ids = set(p.object_refs)
+        hit = [c for c in pkg.creatives if c.creative_id in ids or c.ad_ref in ids or c.adset_ref in ids]
+        if p.owner == "human" and not ids:
             hit = pkg.creatives
         for c in hit:
             targets[c.creative_id] = f"{targets.get(c.creative_id, '')} {p.prompt}".strip()
-        bus.log(cid, "malav.fixer", f"Fix prompt from {p.owner}: {len(hit)} creative(s) to regenerate")
+
+    copy_fixed = fix_copy(state, brief, pkg, targets)
+    for c in copy_fixed:  # text-only problems: new copy, same image
+        targets.pop(c, None)
+    if targets:
+        bus.log(cid, "malav.fixer", f"The auditor asked for fixes: remaking {len(targets)} creative(s)")
+
+    if own.uploads(state):  # client files are never regenerated; only the copy limits above apply
+        n = len(targets)
+        if n:
+            bus.log(cid, "malav.fixer", f"{n} of your creatives were flagged; only you can replace a file you supplied "
+                                        "(copy fixes were applied)")
+        return {"package": pkg.model_dump(mode="json")}
 
     have = {(c.ad_ref, c.ratio) for c in pkg.creatives}
     missing = [j for j in plan_jobs(pkg.blueprint, hooks) if (j.ad_ref, j.ratio) not in have]
@@ -129,7 +171,7 @@ def apply_fixes(state: RuneState, prompts: list[FixPrompt]) -> dict:
     if missing:
         bus.log(cid, "malav.fixer", f"Filling {len(missing)} planned asset(s) that had no creative")
     if jobs:
-        for new in produce(cid, brief, jobs, hooks):
+        for new in produce(cid, brief, jobs, hooks, pkg.blueprint):
             by_id[new.creative_id] = new
     pkg = pkg.model_copy(update={"creatives": list(by_id.values())})
     write_manifest(cid, pkg)

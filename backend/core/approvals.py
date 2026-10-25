@@ -26,16 +26,20 @@ def auto() -> bool:
     return os.getenv("RUNE_AUTO_APPROVE") == "1"
 
 
-def ask_human(client_id: str, agent: str, question: str, options: Optional[list[str]] = None) -> str:
+def ask_human(client_id: str, agent: str, question: str, options: Optional[list[str]] = None, upload: str = "") -> str:
     """An agent asks the user something it is unsure about.
 
     Call it at the START of a node (or in its own node): on resume LangGraph reruns the node
     from the top, so any work done before this call is repeated.
     """
-    bus.say(client_id, agent, "human", "QUESTION", {"question": question, "options": options or []})
+    # the node reruns from the top on resume: don't post the same question a second time
+    last = bus.history(client_id, bus.last_seq(client_id) - 1)
+    if not (last and last[0]["type"] == "QUESTION" and last[0]["payload"].get("question") == question):
+        bus.say(client_id, agent, "human", "QUESTION", {"question": question, "options": options or []})
     if auto():
         return (options or [""])[0]
-    answer = interrupt({"type": "question", "agent": agent, "question": question, "options": options or []})
+    # upload = a button label: the UI offers a file upload; the answer is then the uploaded files' media paths, one per line
+    answer = interrupt({"type": "question", "agent": agent, "question": question, "options": options or [], "upload": upload})
     bus.say(client_id, "human", agent, "RESPONSE", {"answer": answer})
     return str(answer)
 

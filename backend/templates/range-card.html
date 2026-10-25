@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head><meta charset="utf-8">${FONT_LINK}<style>
+:root { --w: ${W}px; --h: ${H}px; --u: ${U}px; --pad: ${PAD}px; --top: ${TOP}px; --cap: ${CAP}px;
+        --c1: ${C1}; --c2: ${C2}; --font: "${FONT}"; --font2: "${FONT2}"; }
+${BASE_CSS}
+/* One carousel card: the product large, its name and two or three facts. Meta draws the button under the card. */
+.shade { background: linear-gradient(180deg, rgba(0,0,0,.5) 0%, rgba(0,0,0,0) 35%, rgba(0,0,0,0) 62%, rgba(0,0,0,.6) 100%); }
+.product, .product.right { bottom: calc(var(--u) * 24); height: 56%; max-width: 78%;
+  left: 50%; right: auto; transform: translateX(-50%); }
+.name { position: absolute; left: var(--pad); right: var(--pad); bottom: calc(var(--u) * 11);
+  font-size: calc(var(--u) * 6); line-height: 1.05; font-weight: 800; text-shadow: 0 2px 14px rgba(0,0,0,.5); }
+.tags { position: absolute; left: var(--pad); right: var(--pad); bottom: calc(var(--u) * 4);
+  display: flex; flex-wrap: wrap; gap: calc(var(--u) * 1.2); }
+.tags span { background: rgba(255,255,255,.94); color: #111; font-weight: 800; border-radius: 999px;
+  font-size: calc(var(--u) * 2.8); padding: calc(var(--u) * .9) calc(var(--u) * 2.2); }
+.price { position: absolute; right: var(--pad); top: var(--top); background: var(--c2); color: var(--c1);
+  font-weight: 900; font-size: calc(var(--u) * 4); border-radius: 999px; padding: calc(var(--u) * 1.2) calc(var(--u) * 3); }
+.price:empty { display: none; }
+</style></head><body class="${BODY_CLASS}" dir="${DIR}">
+<div class="bg" style="background-image:url('${BG}')"></div><div class="shade"></div>
+${LOGO}
+<div class="price">${SUB}</div>
+<img class="product ${PROD_CLASS}" src="${PRODUCT}">
+<div class="name">${HEADLINE}</div>
+<div class="tags">${TAGS}</div>
+</body></html>
