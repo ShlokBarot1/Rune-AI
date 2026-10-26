@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -21,13 +22,16 @@ from core.approvals import ask_human
 from core.schemas import (RATIO_SIZES, AdCopy, CampaignBlueprint, CarouselCard, ClientBrief, Creative, CreativePackage,
                           QAResult, Ratio)
 from core.state import RuneState
-from malav import intake, lineup, media, own, references
+from malav import director, intake, lineup, media, own, references
 from malav.common import demo_mode, fixture
 from malav.hooks import GOAL_CTA, HookPlus, fit_copy
 
-SOURCE = {"chatgpt": "ChatGPT", "chatgpt-model": "ChatGPT, AI model wearing the product", "pollinations": "Pollinations",
+SOURCE = {"chatgpt": "ChatGPT", "chatgpt-model": "ChatGPT, AI model wearing the product",
+          "chatgpt-product": "ChatGPT, your product placed in the scene",
+          "gpt-image-product": "OpenAI image, your product placed in the scene", "pollinations": "Pollinations",
           "gradient": "plain brand-colour backdrop, every image service failed", "client-photo": "your photo"}
 PLANNER, GEN, QA, PACK ="malav.planner", "malav.generator", "malav.qa", "malav.packager"
+PLACE_LAYOUTS = {"product-hero", "brand-block", "type-bold", "ugc-caption", "offer-badge"}  # not packshot / line-up
 VIDEO_MIN, VIDEO_MAX = 6.0, 15.0
 
 
@@ -47,19 +51,24 @@ class Job(BaseModel):
 
 class _Vision(BaseModel):
     legible: bool
+    product_visible: bool           # the brand's real product is clearly in the ad (when one is expected)
     product_ok: bool
+    brand_recognizable: bool        # someone scrolling would know whose ad this is within a second
     brand_colors: bool
     no_artifacts: bool
-    safe_zones: bool = True
+    looks_premium: bool             # would pass for a professional agency ad, not stock photo + text
     score: float                    # 0-100
     notes: str = ""
 
 
-VISION_SYSTEM = """You are the creative QA reviewer of an ad agency. Inspect this Meta ad image.
-legible: all text readable with good contrast. product_ok: the product looks like a real, undistorted
-product photo. brand_colors: the brand colours are visible. no_artifacts: no garbled text, warped
-objects, extra fingers or odd faces. score 0-100 overall ad quality. notes: what to fix, one sentence.
-Judge the image itself; the on-image text is intentionally shorter than the ad's caption copy."""
+VISION_SYSTEM = """You are the strict creative director of a top ad agency reviewing a Meta ad before it spends money.
+legible: every word readable at phone size, good contrast. product_visible: the brand's actual product is clearly
+in the ad (say true when the brief says no product is expected). product_ok: any product looks real and undistorted,
+its label intact. brand_recognizable: within one second a viewer knows which brand this is (logo, packaging,
+colours). brand_colors: the brand's colours carry the design. no_artifacts: no garbled text, warped objects, extra
+fingers, odd faces, meaningless stickers. looks_premium: it could run for a big brand; not a stock photo with text
+pasted on. score 0-100 against what a great agency would ship. notes: the single most important fix, one sentence.
+The on-image text is intentionally shorter than the caption."""
 
 
 def scene_note(note: str, creative_id: str) -> str:
@@ -134,15 +143,17 @@ class Studio:
     """featured: ad set ref -> the brief product it shows (catalogs: each ad set sells its own product)."""
 
     def __init__(self, cid: str, brief: ClientBrief, featured: Optional[dict[str, str]] = None,
-                 tongues: Optional[dict[str, str]] = None):
+                 tongues: Optional[dict[str, str]] = None, look: Optional[director.Direction] = None,
+                 ad_index: Optional[dict[str, int]] = None):
         self.cid, self.brief, self.featured = cid, brief, featured or {}
+        self.look, self.ad_index = look, ad_index or {}
         self.tongues = tongues or {}   # ad set ref -> language of its copy (several-language campaigns)
         self.dir = media.MEDIA / cid
         self.dir.mkdir(parents=True, exist_ok=True)
         self.renderer: Optional[media.Renderer] = None
         self.cutouts: dict[str, Optional[str]] = {}   # product name -> cut-out path (None: no usable photo)
         self.refs: Optional[list[str]] = None
-        self.worn: set[str] = set()      # backgrounds that already show the product on a model
+        self.worn: set[str] = set()      # backgrounds that already show the product (worn or placed by the model)
 
     def __enter__(self):
         try:
@@ -210,7 +221,11 @@ class Studio:
         scene = re.sub(r",?\s*\bno (text|logos?|products?|branding|labels?|watermarks?)\b", "", scene, flags=re.I)
         scene = scene.strip(" ,.")
         colours = ", ".join(media.colour_name(c) for c in b.brand.colors[:2])
-        p = f"{scene}. Mood: {b.brand.tone or 'premium'}." + (f" Colour accents: {colours}." if colours else "")
+        if self.look:  # the chosen look decides every scene's photography and subject
+            scene = f"{self.look.scenes}. {scene}"
+        p = (f"{scene}. Mood: {b.brand.tone or 'premium'}." + (f" Colour accents: {colours}." if colours else "")
+             + (f" Photography: {self.look.photography}." if self.look else "")
+             + (f" Avoid: {self.look.avoid}." if self.look and self.look.avoid else ""))
         note = scene_note(job.note, job.creative_id)
         return f"{p} Changes requested: {note}" if note else p
 
@@ -239,13 +254,17 @@ class Studio:
             product = self.product(job)
             # a wearable goes on a new AI model; only ChatGPT can take the product photo as input
             wear = product if refs is not None and references.wearable(self.brief) else None
+            # layouts where the photo carries the ad: the model places the real product in it (no pasted cut-out)
+            hold = product if (product and not wear and media.can_place_product()
+                               and self.template(job) in PLACE_LAYOUTS) else None
             product = product or (self.range and bool(self.cutouts))  # a range needs room for its line-up
             w, h = (1216, 640) if wide else (768, 1216)
             out = self.dir / f"bg_{ad_ref}{'_wide' if wide else ''}_v{job.version}_{attempt}.png"
             mine = [refs[(2 * i + k) % len(refs)] for k in range(min(2, len(refs)))] if refs else []
             src = media.background(self.scene_prompt(hook, job), out, w, h, self.brief.brand.colors,
-                                   seed=attempt * 7 + job.version, product=bool(product), refs=mine, wear=wear)
-            if src == "chatgpt-model":
+                                   seed=attempt * 7 + job.version, product=bool(product), refs=mine, wear=wear,
+                                   hold=hold)
+            if src in ("chatgpt-model", "chatgpt-product", "gpt-image-product"):
                 self.worn.add(str(out))
             bus.log(self.cid, GEN, f"Image {next(finished)} of {len(groups)} ready ({SOURCE.get(src, src)})")
             return [(j.creative_id, (str(out), src)) for j, _ in members]
@@ -271,7 +290,7 @@ class Studio:
         if not media.codex_on():
             return None
         if self.refs is None:
-            self.refs = references.find(self.brief, self.dir / "refs")
+            self.refs = references.find(self.brief, self.dir / "refs", query=self.look.reference_query if self.look else "")
             wear = references.wearable(self.brief) and self.brief.creative_focus == "product"
             bus.log(self.cid, GEN, f"Found {len(self.refs)} reference photo(s) (Pinterest / web) to guide the image model"
                     + ("; wearable product: a new AI model will wear it" if wear else ""))
@@ -294,18 +313,21 @@ class Studio:
                                    headline=hook.on_screen_text, sub=sub, cta=hook.ad_copy.cta, colors=b.brand.colors,
                                    font=(b.brand.fonts or ["Inter"])[0], logo=b.brand.logo, brand_name=b.business_name,
                                    caption=caption, show_cta=show_cta, products=[c for _, c in shown[:lineup.MAX_LINEUP]],
-                                   tags=lineup.tags(b, [q for q, _ in shown]) if shown else [])  # tags: the whole range
+                                   tags=lineup.tags(b, [q for q, _ in shown]) if shown else (lineup.card_tags(b, p) if product else []))  # range: all; one product: its own
         self.renderer.render(page, out, w, h)
 
     def template(self, job: Job) -> str:
         """A range shows its line-up wherever a single product would go (also in videos and carousel covers); with
         an offer running, every other single-product ad leads with the offer badge."""
-        if self.range and self.range_shots():
-            return "range-lineup"
-        if media.offer_html(self.brief.offer) and job.template_id == "product-hero" and int(
-                hashlib.md5(job.ad_ref.encode()).hexdigest(), 16) % 2 == 0:
+        if job.kind == "carousel" and self.range and self.range_shots():
+            return "range-lineup"  # a carousel's cover is the range
+        offer = bool(media.offer_html(self.brief.offer))
+        layouts = (self.look.layouts if self.look else director.LAYOUTS[self.brief.creative_focus])
+        layouts = [x for x in layouts if x != "range-lineup" or (self.range and self.range_shots())] or ["product-hero"]
+        i = self.ad_index.get(job.ad_ref, int(hashlib.md5(job.ad_ref.encode()).hexdigest(), 16))
+        if offer and i % 2 == 1:  # with an offer running, every other ad leads with the deal
             return "offer-badge"
-        return job.template_id
+        return layouts[i % len(layouts)]
 
     def lang(self, job: Job) -> str:
         return self.tongues.get(job.adset_ref) or (self.brief.languages or ["en"])[0]
@@ -411,35 +433,45 @@ def qa(c: Creative, brief: ClientBrief, on_image: str = "") -> QAResult:
     if not all(checks.values()):
         return QAResult(score=20, passed=False, checks=checks,
                         notes="Failed checks: " + ", ".join(k for k, v in checks.items() if not v))
+    expect = brief.creative_focus in ("product", "range") and any(p.images for p in brief.products)
     try:
         v = llm.structured("vision", VISION_SYSTEM,
-                           f"Ratio {c.ratio}. Brand colours {brief.brand.colors}. Product: {brief.products[0].name}. "
+                           f"Brand: {brief.business_name}. Ratio {c.ratio}. Brand colours {brief.brand.colors}. "
+                           f"Product: {'expected: ' + ', '.join(p.name for p in brief.products[:4]) if expect else 'none expected (brand / photo ad)'}. "
                            f"Intended on-image text: “{on_image or c.ad_copy.headline}” plus the CTA button "
                            f"“{media.cta_label(c.ad_copy.cta)}”.", _Vision, images=[str(look)])
-        checks |= {"legible": v.legible, "product_ok": v.product_ok, "brand_colors": v.brand_colors,
-                   "no_artifacts": v.no_artifacts}
-        hard = ("legible", "no_artifacts")
-        return QAResult(score=v.score, passed=all(checks[k] for k in hard) and v.score >= 60, checks=checks, notes=v.notes)
-    except Exception as e:
-        return QAResult(score=75, passed=True, checks=checks,
-                        notes=f"Deterministic checks only; vision QA unavailable ({e.__class__.__name__}).")
+        checks |= {"legible": v.legible, "product_visible": v.product_visible or not expect, "product_ok": v.product_ok,
+                   "brand_recognizable": v.brand_recognizable, "brand_colors": v.brand_colors,
+                   "no_artifacts": v.no_artifacts, "looks_premium": v.looks_premium}
+        hard = ("legible", "no_artifacts", "product_visible")
+        return QAResult(score=v.score, passed=all(checks[k] for k in hard) and v.score >= 65, checks=checks, notes=v.notes)
+    except Exception as e:  # never blocks the run, but never pretends someone looked either
+        return QAResult(score=60, passed=True, checks=checks | {"reviewed_by_eye": False},
+                        notes=f"Not reviewed by eye: no image-reading model answered ({e.__class__.__name__}). "
+                              "Check it yourself before approving.")
 
 
 # ---------- produce + M8 package ----------
 
 def produce(cid: str, brief: ClientBrief, jobs: list[Job], hooks: dict[str, HookPlus],
-            bp: Optional[CampaignBlueprint] = None) -> list[Creative]:
+            bp: Optional[CampaignBlueprint] = None, look: Optional[dict] = None) -> list[Creative]:
     featured = {s.ref: s.product for s in bp.adsets()} if bp else {}
     tongues = {s.ref: s.language for s in bp.adsets() if s.language} if bp else {}
     items = [(j, hook_for(j, hooks, brief, featured.get(j.adset_ref, ""))) for j in jobs]
     scenes = len({(j.ad_ref, j.ratio == "1.91:1") for j in jobs})  # one background per ad, shared by its ratios
+    if media.CODEX_DOWN:  # never downgrade the images silently
+        bus.log(cid, GEN, f"{media.CODEX_DOWN['why']}" + (f" (until {media.CODEX_DOWN['until']})" if media.CODEX_DOWN.get("until") else "")
+                          + ": using the fallback image service, so expect weaker images"
+                          + ("" if os.getenv("OPENAI_API_KEY") else ". Add OPENAI_API_KEY for full-quality images"))
     if brief.creative_focus == "photos" and brief.photos:
         bus.log(cid, GEN, f"Using your {len(brief.photos)} photo(s) as the ad images; no image generation")
     else:
         bus.log(cid, GEN, f"Generating {scenes} background scene{'s' * (scenes != 1)} with "
                           + ("ChatGPT, 4 at a time (about 1 minute each)" if media.codex_on() else "Pollinations (free image service)"))
     bgs = {}
-    with Studio(cid, brief, featured, tongues) as st:
+    order = list(dict.fromkeys(j.ad_ref for j in jobs))  # ads take turns over the look's layouts
+    with Studio(cid, brief, featured, tongues, director.Direction.model_validate(look) if look else None,
+                {a: i for i, a in enumerate(order)}) as st:
         bgs = st.backgrounds(items)
         sources = sorted({s for _, s in bgs.values()})
         bus.log(cid, GEN, f"Backgrounds ready ({', '.join(sources)}); compositing product + text layers")
@@ -522,6 +554,21 @@ def ensure_visual(cid: str, brief: ClientBrief) -> tuple[ClientBrief, dict]:
     return brief, {"brief": brief.model_dump(mode="json")}
 
 
+def choose_direction(state: RuneState) -> tuple[Optional[director.Direction], dict]:
+    """The human picks the campaign's look (asked first in the node: resuming replays the answer). Kept on reruns."""
+    if state.get("direction"):
+        return director.Direction.model_validate(state["direction"]), {}
+    looks = [director.Direction.model_validate(d) for d in state.get("directions") or []]
+    if not looks:
+        return None, {}
+    answer = ask_human(state["client_id"], director.AGENT, "Pick the look for these ads (every ad will follow it)",
+                       [director.option(d) for d in looks])
+    look = director.pick(looks, answer)
+    bus.log(state["client_id"], director.AGENT, f"Look: {look.name}. Layouts {', '.join(look.layouts)}; "
+                                                f"photography: {look.photography}")
+    return look, {"direction": look.model_dump()}
+
+
 def creatives_step(state: RuneState) -> dict:
     cid = state["client_id"]
     if demo_mode(state):
@@ -535,7 +582,9 @@ def creatives_step(state: RuneState) -> dict:
         pkg = client_package(cid, brief, bp, hooks, items)
         write_manifest(cid, pkg)
         return {"package": pkg.model_dump(mode="json")}
-    brief, update = ensure_visual(cid, brief)
+    look, update = choose_direction(state)
+    brief, more = ensure_visual(cid, brief)
+    update |= more
     note = (state.get("notes") or {}).get("creatives", "")
     if note and state.get("package"):  # Creative Studio "regenerate this asset": only the named creatives
         old = CreativePackage.model_validate(state["package"])
@@ -546,7 +595,8 @@ def creatives_step(state: RuneState) -> dict:
                         kind=c.kind, ratio=c.ratio, template_id=c.template_id or "product-hero",
                         creative_id=c.creative_id, version=c.version + 1, note=note)
                     for c in old.creatives if c.creative_id in named]
-            fresh = {c.creative_id: c for c in produce(cid, brief, jobs, hooks, old.blueprint)}
+            fresh = {c.creative_id: c for c in produce(cid, brief, jobs, hooks, old.blueprint,
+                                                       state.get("direction") or (look.model_dump() if look else None))}
             pkg = old.model_copy(update={"creatives": [fresh.get(c.creative_id, c) for c in old.creatives]})
             write_manifest(cid, pkg)
             return {**update, "package": pkg.model_dump(mode="json")}
@@ -556,7 +606,7 @@ def creatives_step(state: RuneState) -> dict:
     bus.log(cid, PLANNER, f"Making {len(jobs)} files: {sum(j.kind == 'image' for j in jobs)} image(s) and "
                           f"{sum(j.kind == 'video' for j in jobs)} video(s), in sizes {', '.join(brief.deliverables.ratios)}"
                           + (f"; applying: {note}" if note else ""))
-    creatives = produce(cid, brief, jobs, hooks, bp)
+    creatives = produce(cid, brief, jobs, hooks, bp, state.get("direction") or (look.model_dump() if look else None))
     pkg = CreativePackage(client_id=cid, blueprint=bp, creatives=creatives)
     write_manifest(cid, pkg)
     update["package"] = pkg.model_dump(mode="json")

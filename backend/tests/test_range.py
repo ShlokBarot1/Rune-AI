@@ -41,6 +41,7 @@ def test_range_intake_answers():
 
 
 def test_range_campaign_end_to_end(range_brief, monkeypatch):
+    monkeypatch.setenv("RUNE_AUTO_APPROVE", "1")  # the look question picks the first direction
     monkeypatch.setattr(media, "background", lambda prompt, out, w, h, colors, **k: media.gradient(out, w, h, colors) or "gradient")
     monkeypatch.setattr(media, "product_cutout", lambda src, out: media.resolve(src))  # rembg is slow and optional
     state = {"client_id": CID, "intake": {"website": "https://brand.example", "notes": "range"}, "brief": range_brief,
@@ -65,7 +66,8 @@ def test_range_campaign_end_to_end(range_brief, monkeypatch):
     assert all(Path(media.resolve(x.path)).exists() for c in car for x in c.cards)
     images = [c for c in pkg.creatives if c.kind == "image"]
     if images and images[0].model_used.endswith("+html"):  # Playwright available: the line-up template rendered
-        assert images[0].template_id == "range-lineup"
+        from malav.director import LAYOUTS
+        assert {c.template_id for c in images} <= set(LAYOUTS["range"]) and car[0].template_id == "range-lineup"
 
     from auditor.agent import deterministic_checks
     from shlok import launch

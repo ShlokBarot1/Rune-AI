@@ -55,9 +55,31 @@ def _record(input_tokens: int, output_tokens: int) -> None:
         con.execute("insert into llm_usage values (?,?,?,?)", (_today(), "claude", input_tokens, output_tokens))
 
 
+def _image_files(images: list[str]) -> tuple[list[str], list[str]]:
+    """(paths Claude can open with its Read tool, temp files to delete): local files as they are, data: URLs and
+    web images written to temp files."""
+    import base64
+    import httpx
+    paths, temps = [], []
+    for img in images:
+        if img.startswith("data:"):
+            head, b64 = img.split(",", 1)
+            ext = "." + (head.split("/")[1].split(";")[0] if "/" in head else "png")
+            raw = base64.b64decode(b64)
+        elif img.startswith("http"):
+            raw, ext = httpx.get(img, timeout=60, follow_redirects=True).content, ".jpg"
+        else:
+            paths.append(os.path.abspath(img))
+            continue
+        with tempfile.NamedTemporaryFile("wb", suffix=ext, delete=False) as t:
+            t.write(raw)
+        paths.append(t.name)
+        temps.append(t.name)
+    return paths, temps
+
+
 def chat(system: str, user: str, images: Optional[list[str]] = None) -> str:
-    if images:
-        raise NotImplementedError("image input not wired for the Claude Code CLI; next provider handles it")
+    """images: the CLI looks at them with its Read tool (only that tool, only for those files)."""
     budget = int(os.getenv("CLAUDE_DAILY_TOKENS", "150000"))
     if used_today() >= budget:
         raise BudgetExceeded(f"Claude daily budget of {budget} tokens used")
@@ -66,15 +88,20 @@ def chat(system: str, user: str, images: Optional[list[str]] = None) -> str:
         f.write(system)  # system prompts with skills are long; a file avoids Windows command-line limits
     env = {**os.environ, "CLAUDE_CODE_MAX_OUTPUT_TOKENS": os.getenv("CLAUDE_MAX_TOKENS", "2048")}
     env.pop("ANTHROPIC_API_KEY", None)  # never bill API credits; use the logged-in plan
+    paths, temps = _image_files(images or [])
+    tools = ["--tools", "Read", "--allowedTools", "Read"] if paths else ["--tools", ""]
+    if paths:
+        user = "First open and look at these image files with the Read tool:\n" + "\n".join(paths) + "\n\n" + user
     try:
         proc = subprocess.run(
-            ["claude", "-p", "--model", MODEL, "--effort", "low", "--system-prompt-file", f.name,
-             "--tools", "", "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence",
-             "--output-format", "json"],
-            input=user, capture_output=True, text=True, encoding="utf-8", timeout=180, env=env,
+            ["claude", "-p", "--model", MODEL, "--effort", "low", "--system-prompt-file", f.name, *tools,
+             "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence", "--output-format", "json"],
+            input=user, capture_output=True, text=True, encoding="utf-8", timeout=240 if paths else 180, env=env,
             cwd=tempfile.gettempdir())
     finally:
         os.unlink(f.name)
+        for t in temps:
+            os.unlink(t)
     try:
         out = json.loads(proc.stdout)
     except json.JSONDecodeError:

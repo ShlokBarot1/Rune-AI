@@ -79,6 +79,13 @@ def deterministic_checks(state: RuneState) -> list[Finding]:
         if s.ref not in targeting:
             add("blocker", "targeting", s.ref, "shlok", "Ad set has no targeting spec.")
 
+    # copy may only state facts the brief backs (no invented prices, quantities, comparisons)
+    from malav.hooks import facts_of, ungrounded
+    facts = facts_of(brief, state.get("context_doc", ""))
+    for c in pkg.creatives:
+        if made_up := ungrounded(f"{c.ad_copy.primary_text} {c.ad_copy.headline} {c.ad_copy.description}", facts):
+            add("major", "copy_policy", c.creative_id, "malav", "Unsupported claim: " + "; ".join(made_up[:3]))
+
     # policy: restricted categories (core.compliance)
     for r in compliance.rules_for(brief):
         if r.action == "blocked":

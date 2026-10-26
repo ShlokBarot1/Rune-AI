@@ -63,11 +63,28 @@ def _stem(w: str) -> str:
     return w[:-1] if w.endswith("s") and not w.endswith("ss") else w
 
 
+# words in a client's note that say what they want done, not what they sell
+_NOTE_WORDS = {"range", "product", "campaign", "general", "brand", "showcase", "about", "their", "with", "collection",
+               "raise", "awareness", "presence", "scene", "want", "wants", "promote", "launch", "market", "marketing",
+               "sale", "sales", "advert", "advertise", "advertising", "people", "customer", "customers", "more",
+               "new", "every", "first", "audience", "reach", "grow", "growth", "boost", "awareness", "visibility",
+               "category", "space", "world", "india", "online", "store", "shop", "buy", "make", "should", "would"}
+
+
 def _words(hint: str, url: str) -> set[str]:
     """What the range is about, stemmed. The brand's own name is dropped: it's in every link on its site."""
-    return ({_stem(w) for w in re.findall(r"[a-z]{4,}", hint.lower())}
-            - {"range", "product", "campaign", "general", "brand", "showcase", "about", "their", "with", "collection"}
+    return ({_stem(w) for w in re.findall(r"[a-z]{4,}", hint.lower())} - _NOTE_WORDS
             - {_stem(w) for w in re.findall(r"[a-z]{4,}", site(url))})
+
+
+def search_hint(url: str, known: list[Product], note: str, brand: str = "") -> str:
+    """What to look for on the site: the words the products' names share, the URL's path ("/protein"), then the
+    client's note. Product names say what is sold far better than a note about what the client wants."""
+    from collections import Counter
+    counts = Counter(t for p in known for t in _tokens(p.name, brand))
+    common = [t for t, n in counts.most_common(4) if n >= max(2, len(known) // 3)] or [t for t, _ in counts.most_common(2)]
+    path = [w for w in re.findall(r"[a-z]{4,}", urlparse(url).path.lower())]
+    return " ".join(dict.fromkeys(path + common)) or note
 
 
 def _pages(url: str, hint: str, n: int = 3) -> tuple[list[str], list[Product]]:
@@ -172,42 +189,84 @@ def shop_feed(url: str, hint: str = "", limit: int = 24) -> list[Product]:
     return out[:limit]
 
 
-def find_range(cid: str, url: str, hint: str, known: list[Product], max_reads: int = 4) -> list[Product]:
-    """The range's products with real photos where the site has them, known products first. Never raises.
-    Tries the store's own product API first (Shopify / WooCommerce: exact and instant); else reads the best listing
-    pages, and when an entry it finds is itself a category page (sites often list categories first), reads that
-    one level deeper and drops the category from the products."""
+def _tokens(name: str, brand: str = "") -> set[str]:
+    drop = set(re.findall(r"[a-z0-9]+", brand.lower())) | {"pack", "of", "the", "and", "with", "g", "ml", "kg", "l"}
+    return {t for t in re.findall(r"[a-z0-9]+", name.lower()) if t not in drop and not t.isdigit()}
+
+
+def _distinct(names: list[str], brand: str) -> list[set[str]]:
+    """Each name's words minus the ones most names share ("high", "protein" in a protein range): what tells products
+    apart is what matching must agree on."""
+    sets = [_tokens(n, brand) for n in names]
+    from collections import Counter
+    df = Counter(t for ts in sets for t in ts)
+    common = {t for t, n in df.items() if len(sets) >= 4 and n > 0.4 * len(sets)}
+    return [ts - common or ts for ts in sets]
+
+
+def match(known: list[Product], pool: list[Product], brand: str = "") -> tuple[list[Product], set[int]]:
+    """Fill the brief's own products from what the site has: a pool product agreeing on the distinguishing words
+    (paneer / dahi / lassi, not "high protein") gives it its photo, page, price and facts. A wrong product photo is
+    worse than none, so the bar is high. Returns (products, indexes of the pool products used)."""
+    sets = _distinct([k.name for k in known] + [c.name for c in pool], brand)
+    ks, cs = sets[:len(known)], sets[len(known):]
+    out, used = [], set()
+    for k, kt in zip(known, ks):
+        best, score = None, 0.0
+        for i, (c, ct) in enumerate(zip(pool, cs)):
+            if not c.images or not (kt & ct):
+                continue
+            j = len(kt & ct) / len(kt | ct)
+            if j > score:
+                best, score = i, j
+        if best is not None and score >= 0.5:
+            used.add(best)
+            if not k.images:
+                c = pool[best]
+                k = k.model_copy(update={"images": c.images, "url": k.url or c.url, "price": k.price or c.price,
+                                         "currency": k.currency or c.currency, "usp": [u for u in c.usp if u] or k.usp})
+        out.append(k)
+    return out, used
+
+
+def find_range(cid: str, url: str, hint: str, known: list[Product], max_reads: int = 4, add_new: bool = True,
+               brand: str = "") -> list[Product]:
+    """The brand's products with real photos where the site has them. Never raises.
+    The brief's own products (`known`) come first, filled from the site by name; add_new also adds the other
+    products found (a range). Tries the store's own product API first (Shopify / WooCommerce: exact and instant);
+    else reads the best listing pages (one level deeper when they list categories) and product pages from search."""
+    hint = search_hint(url, known, hint, brand) if (known or urlparse(url or "").path.strip("/")) else hint
+    pool: list[Product] = []
     if url and len(feed := [p for p in shop_feed(url, hint) if p.images]) >= 2:
-        names = {p.name.lower() for p in known}
-        found = list(known) + [p for p in feed if p.name.lower() not in names][:12]
+        pool = feed
         bus.log(cid, AGENT, f"Read {len(feed)} products from the store's product catalogue: "
                             + ", ".join(p.name for p in feed[:6]))
-        return found
-    queue, direct = _pages(url, hint) if url else ([], [])
-    found, read, dom = list(known), set(), site(url) if url else ""
-    while queue and len(read) < max_reads and len(found) - len(known) < 8:
-        page = queue.pop(0)
-        if page in read:
-            continue
-        read.add(page)
-        try:
-            got = llm.structured("fast", RANGE_SYSTEM, f"Range: {hint}\nPage: {page}\n\n{web.read_page(page)}", _Range)
-        except Exception as e:
-            bus.log(cid, AGENT, f"Couldn't read the range from {page} ({e.__class__.__name__})")
-            continue
-        items = [p for p in got.products if p.name]
-        bus.log(cid, AGENT, f"Read the range on {page}: {', '.join(p.name for p in items[:8]) or 'no products'}")
-        if len(items) >= 2:  # this page was a listing: whatever linked here was a category, not a product
-            found = [p for p in found if (p.url or "").rstrip("/") != page.rstrip("/")]
-        names = {p.name.lower() for p in found}
-        new = [p for p in items if p.name.lower() not in names]
-        found += new
-        if len(new) < 3:  # maybe categories: look one level deeper
-            queue += [p.url for p in new if p.url and urlparse(p.url).netloc.lower().endswith(dom) and p.url not in read]
-    names = {p.name.lower() for p in found}
-    direct = [p for p in direct if p.name.lower() not in names][:8]
-    with ThreadPoolExecutor(max_workers=4) as ex:  # product pages the search found: their own facts and price
-        found += list(ex.map(lambda p: _details(p, hint), direct))
+    elif url:
+        queue, direct = _pages(url, hint)
+        read, dom = set(), site(url)
+        while queue and len(read) < max_reads and len(pool) < 10:
+            page = queue.pop(0)
+            if page in read:
+                continue
+            read.add(page)
+            try:
+                got = llm.structured("fast", RANGE_SYSTEM, f"Range: {hint}\nPage: {page}\n\n{web.read_page(page)}", _Range)
+            except Exception as e:
+                bus.log(cid, AGENT, f"Couldn't read the range from {page} ({e.__class__.__name__})")
+                continue
+            items = [p for p in got.products if p.name]
+            bus.log(cid, AGENT, f"Read the range on {page}: {', '.join(p.name for p in items[:8]) or 'no products'}")
+            if len(items) >= 2:  # this page was a listing: whatever linked here was a category, not a product
+                pool = [p for p in pool if (p.url or "").rstrip("/") != page.rstrip("/")]
+            names = {p.name.lower() for p in pool}
+            fresh = [p for p in items if p.name.lower() not in names]
+            pool += fresh
+            if len(fresh) < 3:  # maybe categories: look one level deeper
+                queue += [p.url for p in fresh if p.url and urlparse(p.url).netloc.lower().endswith(dom) and p.url not in read]
+        names = {p.name.lower() for p in pool}
+        direct = [p for p in direct if p.name.lower() not in names][:8]
+        with ThreadPoolExecutor(max_workers=4) as ex:  # product pages the search found: their own facts and price
+            pool += list(ex.map(lambda p: _details(p, hint), direct))
 
     def photo(p: Product) -> Product:
         imgs = [i for i in p.images[:3] if media.product_photo_ok(i)]
@@ -219,15 +278,20 @@ def find_range(cid: str, url: str, hint: str, known: list[Product], max_reads: i
                 pass
         return p.model_copy(update={"images": imgs})
     with ThreadPoolExecutor(max_workers=6) as ex:
-        found = list(ex.map(photo, found[:12]))
-    seen, distinct = set(), []
-    for p in found:  # colour / size variants of one model share the same facts: keep the first
-        key = tuple(u.lower() for u in p.usp)
-        if not key or key not in seen:
-            seen.add(key)
-            distinct.append(p)
-    found = distinct
-    bus.log(cid, AGENT, f"Range: {len(found)} product(s), {sum(bool(p.images) for p in found)} with a real photo")
+        pool = list(ex.map(photo, pool[:14]))
+    found, used = match(known, pool, brand)
+    if add_new:
+        sets = _distinct([k.name for k in found] + [c.name for c in pool], brand)
+        mine, theirs = sets[:len(found)], sets[len(found):]
+        extra, seen = [], [*mine]
+        for i, (c, ct) in enumerate(zip(pool, theirs)):
+            # a known product or a variant already shown (same distinguishing words) isn't a new product
+            if i in used or any(ct and ct <= x or x and x <= ct for x in seen):
+                continue
+            seen.append(ct)
+            extra.append(c)
+        found += extra[:max(0, 12 - len(found))]
+    bus.log(cid, AGENT, f"Products: {len(found)}, {sum(bool(p.images) for p in found)} with a real photo")
     return found
 
 

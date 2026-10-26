@@ -23,10 +23,10 @@ def wearable(brief: ClientBrief) -> bool:
     return bool(WEARABLE.search(" ".join([brief.industry, *(p.name for p in brief.products)])))
 
 
-def find(brief: ClientBrief, out_dir: Path, n: int = 6) -> list[str]:
+def find(brief: ClientBrief, out_dir: Path, n: int = 6, query: str = "") -> list[str]:
     """Download up to n reference photos into out_dir; [] when search is unavailable. Never raises."""
-    what = (f"{brief.industry} model wearing, editorial fashion photoshoot" if wearable(brief)
-            else f"{brief.industry} product photography, styled lifestyle scene")
+    what = query or (f"{brief.industry} model wearing, editorial fashion photoshoot" if wearable(brief)
+                     else f"{brief.industry} product photography, styled lifestyle scene")
     urls: list[str] = []
     for q in (f"{what} site:pinterest.com", what):
         try:

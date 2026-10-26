@@ -90,7 +90,7 @@ def handle_feedback(state: RuneState, feedback: CreativeFeedback) -> CreativePac
                 "ad_copy": copy, "landing_url": landing_url(brief, j.campaign_ref, j.ad_ref),
                 "version": j.version, "parent_id": j.parent_id, "prompt": note}))
     else:
-        creatives = produce(cid, brief, jobs, hook_map, pkg.blueprint)
+        creatives = produce(cid, brief, jobs, hook_map, pkg.blueprint, state.get("direction"))
 
     bp = pkg.blueprint.model_copy(deep=True)
     for s in bp.adsets():
@@ -171,7 +171,7 @@ def apply_fixes(state: RuneState, prompts: list[FixPrompt]) -> dict:
     if missing:
         bus.log(cid, "malav.fixer", f"Filling {len(missing)} planned asset(s) that had no creative")
     if jobs:
-        for new in produce(cid, brief, jobs, hooks, pkg.blueprint):
+        for new in produce(cid, brief, jobs, hooks, pkg.blueprint, state.get("direction")):
             by_id[new.creative_id] = new
     pkg = pkg.model_copy(update={"creatives": list(by_id.values())})
     write_manifest(cid, pkg)

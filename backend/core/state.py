@@ -28,6 +28,8 @@ class RuneState(TypedDict, total=False):
     audit: dict           # AuditReport
     audit_round: int
     notes: dict           # step name -> human change request the step must apply on rerun
+    directions: list      # malav: the creative director's proposed looks (malav.director.Direction)
+    direction: dict       # malav: the look the human picked; every creative follows it
     live: bool
 
 

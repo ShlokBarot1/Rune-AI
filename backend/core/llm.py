@@ -77,8 +77,8 @@ def _openai_chat(c: OpenAI, model: str, system: str, user: str, images: Optional
 def providers(alias: str, agent: str) -> list[tuple[str, Callable]]:
     team = agent.split(".")[0]
     chain: list[tuple[str, Callable]] = []
-    if claude.enabled() and team in os.getenv("RUNE_CLAUDE_FOR", "shlok,auditor,core").split(","):
-        chain.append(("claude", lambda s, u, i: claude.chat(s, u, [image_url(x) for x in i or []])))
+    if claude.enabled() and (team in os.getenv("RUNE_CLAUDE_FOR", "shlok,auditor,core").split(",") or alias == "vision"):
+        chain.append(("claude", lambda s, u, i: claude.chat(s, u, list(i or []))))
     if os.getenv("FREELLM_API_KEY", "").startswith("freellmapi-"):
         chain.append(("freellm", lambda s, u, i: _openai_chat(client(), model_for(alias), s, u, i)))
     chain.append(("ollama", lambda s, u, i: _openai_chat(ollama(), os.getenv("OLLAMA_MODEL", "llama3.1:latest"), s, u, i)))

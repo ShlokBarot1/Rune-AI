@@ -79,7 +79,9 @@ class _Concepts(BaseModel):
 GEN_SYSTEM = f"""You write scroll-stopping Meta ad hooks (the first line / first 3 seconds). Write 10
 hooks for ONE ad set, mixing frameworks: {', '.join(FRAMEWORKS)}. Max 12 words each. Use the persona's
 verbatim language. Policy: never assert or imply the viewer's personal attributes (health, finances,
-body, religion, etc.), no guarantees or unrealistic claims. Never use the brand's don't-words."""
+body, religion, etc.), no guarantees or unrealistic claims. Never use the brand's don't-words.
+Facts only: every number (price, grams, pack count, %), comparison and superlative must come from the product facts
+given. Never invent a price, a quantity, a competitor comparison or "#1 / only / scam" style claims."""
 
 CRITIC_SYSTEM = """You are a harsh ad critic. Score each hook 1-10 on scroll-stop power, clarity,
 persona fit, brand fit and policy safety (a policy risk caps the score at 3). One short note each."""
@@ -88,7 +90,36 @@ CONCEPT_SYSTEM = """For each hook write Meta ad copy and a visual concept.
 headline <= 40 chars; primary_text starts with the hook and its first 125 chars carry it; description
 <= 30 chars; cta from the enum. scene = a photographic background/setting for the product (lighting,
 props, mood, brand colours) with NO text, NO logos and NO product in it (the real product photo is
-composited later). on_screen_text <= 8 words. voiceover = 25-35 words, hook first. Same policy rules."""
+composited later). on_screen_text <= 8 words. voiceover = 25-35 words, hook first. Same policy rules, and facts
+only: no number, price, quantity or comparison that isn't in the product facts."""
+
+
+# numbers that make a claim: prices, quantities, percentages, durations, counts
+_NUMBER = re.compile(r"[₹$€£]\s?\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s?(?:%|x\b|[a-z]+\b)?", re.I)
+# claims nobody may make without proof on the brief
+_UNPROVEN = re.compile(r"\b(no (other )?competitor|only (brand|one|company)|#\s?1|number one|best in (india|the world|class)|"
+                       r"cheapest|lowest price|scam|clinically (proven|tested)|doctor[- ]recommended|dermatologist[- ]"
+                       r"(tested|recommended)|lab[- ]tested|certified|award[- ]winning|most trusted|world'?s first)\b", re.I)
+
+
+def facts_of(brief: ClientBrief, context_doc: str = "") -> str:
+    """Everything the copy may cite: the brief (products, prices, facts, offer, notes) and the site-derived context."""
+    return f"{brief.model_dump_json()} {context_doc}".lower()
+
+
+def ungrounded(text: str, facts: str) -> list[str]:
+    """Numbers and strong claims in `text` the facts don't contain: made-up prices, pack counts, protein grams,
+    comparisons. A number counts as grounded when its digits appear in the facts (1 is always fine)."""
+    issues = []
+    digits_in_facts = set(re.findall(r"\d+(?:\.\d+)?", facts.replace(",", "")))
+    for m in _NUMBER.finditer(text):
+        num = re.search(r"\d+(?:\.\d+)?", m.group(0).replace(",", "")).group(0)
+        if num not in ("0", "1") and num not in digits_in_facts:
+            issues.append(f"“{m.group(0).strip()}” isn't in the product facts")
+    for m in _UNPROVEN.finditer(text):
+        if m.group(0).lower() not in facts:
+            issues.append(f"“{m.group(0)}” is a claim the brief doesn't back")
+    return issues
 
 
 def policy_issues(text: str, brief: ClientBrief) -> list[str]:
@@ -225,8 +256,10 @@ def _fallback_hooks(brief: ClientBrief, adset: AdSetPlan, n: int) -> list[_Gen]:
 
 def hooks_for_adset(cid: str, brief: ClientBrief, persona: Optional[Persona], adset: AdSetPlan, n_keep: int,
                     context_doc: str = "", note: str = "") -> list[HookPlus]:
-    """Generate -> policy filter -> critic -> keep n_keep -> copy + concept. Ids are assigned by the caller."""
+    """Generate -> policy + facts filter -> critic -> keep n_keep -> copy + concept (facts-checked, rewritten when it
+    invents something). Ids are assigned by the caller."""
     bits = _brief_bits(brief, persona, adset, note)
+    facts = facts_of(brief, context_doc)
     try:
         gen = llm.structured("creative", skills.with_skills(GEN_SYSTEM, ["ad-creative", "marketing-psychology"], context_doc),
                              bits, _Hooks).hooks
@@ -236,9 +269,9 @@ def hooks_for_adset(cid: str, brief: ClientBrief, persona: Optional[Persona], ad
         gen = []
     safe = []
     for g in gen:
-        issues = policy_issues(g.text, brief)
+        issues = policy_issues(g.text, brief) + ungrounded(g.text, facts)
         if issues:
-            bus.log(cid, AGENT, f"Policy pre-check dropped: “{g.text}” ({'; '.join(issues)})")
+            bus.log(cid, AGENT, f"Dropped: “{g.text}” ({'; '.join(issues)})")
         else:
             safe.append(g)
     if len(safe) < n_keep:
@@ -277,6 +310,13 @@ def hooks_for_adset(cid: str, brief: ClientBrief, persona: Optional[Persona], ad
                                cta=c.cta or GOAL_CTA[brief.goal]), g.text, brief)
         if policy_issues(f"{copy.primary_text} {copy.headline} {copy.description}", brief):
             copy = fit_copy(AdCopy(primary_text=g.text, headline=p.name, cta=GOAL_CTA[brief.goal]), g.text, brief)
+        if made_up := ungrounded(f"{copy.primary_text} {copy.headline} {copy.description}", facts):
+            bus.log(cid, AGENT, f"Copy invented facts ({'; '.join(made_up[:3])}); rewriting it from the facts")
+            fixed = rewrite_copy(cid, brief, copy, made_up + ["Use only numbers and claims from the product facts."])
+            copy = fixed if not ungrounded(f"{fixed.primary_text} {fixed.headline} {fixed.description}", facts) else \
+                fit_copy(AdCopy(primary_text=g.text, headline=p.name[:40], cta=GOAL_CTA[brief.goal]), g.text, brief)
+        if ungrounded(c.on_screen_text or "", facts):  # the words drawn on the image follow the same rule
+            c.on_screen_text = g.text if not ungrounded(g.text, facts) else copy.headline
         out.append(HookPlus(id="", adset_ref=adset.ref, text=g.text, framework=g.framework, critic_score=score,
                             ad_copy=copy, scene=c.scene or f"{adset.angle}, lifestyle setting, soft natural light",
                             on_screen_text=_cut(c.on_screen_text or g.text, 60), voiceover=c.voiceover or g.text))
@@ -307,4 +347,6 @@ def hooks_step(state: RuneState) -> dict:
     bus.log(cid, AGENT, f"Writing hooks for {len(own_ads)} ad sets" + (f"; applying: {note}" if note else ""))
     with ThreadPoolExecutor(max_workers=2) as ex:
         hooks = [h for hs in ex.map(one, own_ads) for h in hs]
-    return {"hooks": hooks}
+    from malav import director  # the looks to choose from, shown with the hooks at their gate
+    looks = director.propose(cid, brief, research.summary, [h["text"] for h in hooks])
+    return {"hooks": hooks, "directions": [d.model_dump() for d in looks]}

@@ -12,6 +12,7 @@ website scrape or earlier questions. Only `brief` and `context_doc` leave the su
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import re
 import time
 from datetime import date, timedelta
@@ -482,7 +483,7 @@ def prefill(s: IntakeState) -> dict:
         except Exception as e:
             bus.log(cid, AGENT, f"Couldn't read the website ({e.__class__.__name__}); I'll ask instead")
         try:
-            colors = web.page_colors(url)
+            colors = [c for c in web.page_colors(url) if c not in web.FRAMEWORK_COLOURS]  # not Bootstrap's palette
             bus.log(cid, AGENT, f"Colours used on the site: {', '.join(colors) or 'none found'}")
         except Exception:
             pass
@@ -500,6 +501,19 @@ def prefill(s: IntakeState) -> dict:
         bus.log(cid, AGENT, f"Draft extraction failed ({e.__class__.__name__}); I'll ask for everything")
     if not draft.brand.colors and colors:
         draft.brand.colors = colors[:3]
+    draft.brand.colors = [c for c in draft.brand.colors if c.upper() not in web.FRAMEWORK_COLOURS]
+    if url:  # the real logo, the colours in it, the site's fonts: what makes an ad recognisably theirs
+        ident = web.brand_identity(url, draft.business_name or url, media.MEDIA / cid / "brand")
+        if ident["logo"]:
+            draft.brand.logo = media.rel(Path(ident["logo"]))
+        if ident["colors"]:
+            draft.brand.colors = ident["colors"]
+        if ident["fonts"]:
+            draft.brand.fonts = ident["fonts"][:2]
+        bus.log(cid, AGENT, "Brand identity: " + ", ".join(x for x in [
+            "logo found" if ident["logo"] else "no logo found (upload one at the brief)",
+            f"colours {', '.join(draft.brand.colors)}" + (" (from the logo)" if ident["colors"] else ""),
+            f"font {draft.brand.fonts[0]}" if draft.brand.fonts else ""] if x))
     for p in draft.products:  # logos and app icons are not product photos (see media.product_photo_ok)
         p.images = [i for i in p.images[:3] if media.product_photo_ok(i)]
     for p in draft.products[:3]:  # the creatives composite the REAL product photo, so make sure we have one
@@ -512,9 +526,17 @@ def prefill(s: IntakeState) -> dict:
             except Exception:
                 pass
 
+    if draft.creative_focus == "brand" and draft.products:
+        # a brand that sells things is advertised WITH them: brand-only scenes are for causes / pure image, and
+        # only when the human picks them (the visual question, or the brief editor)
+        draft.creative_focus = "range" if len(draft.products) > 1 else "product"
+        bus.log(cid, AGENT, f"Awareness for a brand with products: the ads will show your "
+                            f"{'range' if len(draft.products) > 1 else 'product'} (switch to general scenes at the brief if you prefer)")
     ranged = draft.creative_focus == "range"
-    if ranged:  # the notes asked for a range: read it off the site before asking for photos
-        draft.products = lineup.find_range(cid, url, notes or f"{draft.business_name} {draft.industry}", draft.products)
+    if ranged or (draft.creative_focus == "product" and not all(p.images for p in draft.products)):
+        # a range: read it off the site; one product: find its real photo there before asking for one
+        draft.products = lineup.find_range(cid, url, notes or f"{draft.business_name} {draft.industry}", draft.products,
+                                           add_new=ranged, brand=draft.business_name)
     if items := own.uploads(s):
         d = own.deliverables(own.probe_all(cid, items))
         draft = draft.model_copy(update={**d, "confidence": {**draft.confidence, "deliverables": 1.0}})
@@ -552,7 +574,8 @@ def ask(s: IntakeState) -> dict:
     ranged = s.get("ranged", False)
     if slot == "visual" and d.creative_focus == "range" and not ranged:  # just chosen: read the range off the site
         notes = (s.get("intake") or {}).get("notes", "")
-        d.products = lineup.find_range(cid, _website(s), notes or f"{d.business_name} {d.industry}", d.products)
+        d.products = lineup.find_range(cid, _website(s), notes or f"{d.business_name} {d.industry}", d.products,
+                                       brand=d.business_name)
         ranged = True
     rest = s["pending"][1:]
     if slot == "visual" and not visual_ready(d):  # e.g. "use our photos": next, the upload itself

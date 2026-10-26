@@ -27,7 +27,8 @@ from core import llm
 BACKEND = Path(__file__).resolve().parent.parent
 TEMPLATES = BACKEND / "templates"
 MEDIA = BACKEND / "media"
-TEMPLATE_IDS = ["product-hero", "offer-badge", "ugc-caption", "range-lineup", "range-card"]
+TEMPLATE_IDS = ["product-hero", "offer-badge", "ugc-caption", "range-lineup", "range-card", "brand-block", "packshot",
+                "type-bold"]
 NEGATIVE = "no text, no letters, no words, no logos, no labels, no watermark, no products, no packaging"
 
 
@@ -50,20 +51,32 @@ WEAR = ("The first attached image is the client's real product. Create a new pho
         "identical. Any other attached images are references for pose, framing, lighting and styling only: do not "
         "reproduce any person, face, text or logo from them. Keep the upper quarter calm and uncluttered for a headline. "
         "No added text, no watermark.")
+PLACE = ("The first attached image is the client's real product. Create a photorealistic advertising photograph "
+         "with exactly this product placed naturally in the scene described: keep its packaging shape, colours, label, "
+         "printed text and logo identical (never redraw, translate or invent label text), light and shadows matching "
+         "the scene, the product sharp and clearly visible, about a third of the frame, in the lower half. Keep the "
+         "upper third calm and uncluttered for a headline. Any other attached images are references for mood and "
+         "composition only: do not reproduce any person, text, logo or product from them. No added text, no watermark.")
 REFS = (" The attached images are references for mood, lighting, composition and styling only: do not reproduce any "
         "person, text, logo or product from them.")
 
 
 def background(prompt: str, out: Path, w: int, h: int, colors: list[str], seed: int = 1, product: bool = True,
-               refs: list[str] = (), wear: Optional[str] = None) -> str:
+               refs: list[str] = (), wear: Optional[str] = None, hold: Optional[str] = None) -> str:
     """Generate the scene; returns the model/source used. Never raises: last resort is a brand gradient.
     product=False (no photo to composite, e.g. a university or a service) asks for headline room instead.
     refs: reference photos for ChatGPT. wear: photo of a wearable product; ChatGPT then puts it on a new AI model
-    (source "chatgpt-model": the product is already in the picture, so the template skips the product layer)."""
+    (source "chatgpt-model": the product is already in the picture, so the template skips the product layer).
+    hold: the real product photo; the model places it in the scene itself (natural light and shadows, unlike a
+    pasted cut-out): source "chatgpt-product" / "gpt-image-product", and the template skips the product layer."""
     room = "empty space for a product" if product else "a calm, uncluttered area for a headline"
     full = f"{prompt.rstrip(' .')}. Photorealistic advertising photograph, {room}. {NEGATIVE}."
     if wear and _codex(f"{prompt.rstrip(' .')}. {WEAR}", out, w, h, [wear, *refs]):
         return "chatgpt-model"
+    if hold and _codex(f"{prompt.rstrip(' .')}. {PLACE}", out, w, h, [hold, *refs]):
+        return "chatgpt-product"
+    if hold and _openai_edit(f"{prompt.rstrip(' .')}. {PLACE}", hold, out, w, h):
+        return "gpt-image-product"
     if _codex(full + (REFS if refs else ""), out, w, h, list(refs)):
         return "chatgpt"
     try:
@@ -97,12 +110,36 @@ def background(prompt: str, out: Path, w: int, h: int, colors: list[str], seed: 
     return "gradient"
 
 
+def _openai_edit(prompt: str, image: str, out: Path, w: int, h: int) -> bool:
+    """OpenAI image edit (gpt-image-1) with the product photo as input; needs OPENAI_API_KEY. False when unavailable."""
+    if not os.getenv("OPENAI_API_KEY"):
+        return False
+    try:
+        from openai import OpenAI
+        size = "1024x1536" if h > w * 1.15 else "1536x1024" if w > h * 1.15 else "1024x1024"
+        with open(image, "rb") as f:
+            r = OpenAI(timeout=300).images.edit(model=os.getenv("RUNE_IMAGE_EDIT_MODEL", "gpt-image-1"), image=[f],
+                                               prompt=prompt, size=size)
+        out.write_bytes(base64.b64decode(r.data[0].b64_json))
+        return True
+    except Exception:
+        return False
+
+
+def can_place_product() -> bool:
+    """An image model that takes the product photo as input is available (and not switched off)."""
+    return os.getenv("RUNE_PRODUCT_IN_SCENE", "1") == "1" and (codex_on() or bool(os.getenv("OPENAI_API_KEY")))
+
+
 _POLLINATIONS = threading.Lock()
 _CODEX = threading.Semaphore(4)  # ponytail: 4 parallel tested fine on ChatGPT Go (4 images ~2 min); lower if it rate-limits
 
 
+CODEX_DOWN: dict = {}  # {"why": ..., "until": ...} once ChatGPT refuses (usage limit, signed out): stop asking
+
+
 def codex_on() -> bool:
-    return os.getenv("RUNE_IMAGE_CODEX") == "1" and bool(shutil.which("codex"))
+    return os.getenv("RUNE_IMAGE_CODEX") == "1" and bool(shutil.which("codex")) and not CODEX_DOWN
 
 
 def _codex(prompt: str, out: Path, w: int, h: int, images: list[str] = ()) -> bool:
@@ -117,13 +154,21 @@ def _codex(prompt: str, out: Path, w: int, h: int, images: list[str] = ()) -> bo
     try:
         with _CODEX:
             # low effort: the agent only relays one prompt to the image tool (44 s vs ~80 s at the user's "high")
-            subprocess.run([shutil.which("codex"), "exec", "--skip-git-repo-check", "--ephemeral",
-                            "-c", "model_reasoning_effort=low", "-C", str(out.parent),
-                            "--sandbox", "workspace-write", ask, *(["-i", *images] if images else [])],
-                           input=b"", capture_output=True, timeout=600)
+            proc = subprocess.run([shutil.which("codex"), "exec", "--skip-git-repo-check", "--ephemeral",
+                                   "-c", "model_reasoning_effort=low", "-C", str(out.parent),
+                                   "--sandbox", "workspace-write", ask, *(["-i", *images] if images else [])],
+                                  input=b"", capture_output=True, timeout=600)
     except Exception:
         return False
-    return out.exists() and out.stat().st_size > 0
+    if out.exists() and out.stat().st_size > 0:
+        return True
+    said = (proc.stdout + proc.stderr).decode("utf-8", "replace")
+    m = re.search(r"usage limit", said, re.I)
+    until = re.search(r"try again at ([^\n]+?)\.?\s*$", said, re.I | re.M)
+    if m or re.search(r"not logged in|log ?in required|unauthori[sz]ed", said, re.I):
+        CODEX_DOWN.update({"why": "ChatGPT image limit reached" if m else "Codex isn't signed in to ChatGPT",
+                           "until": until.group(1).strip() if until else ""})
+    return False
 
 
 def _crop_bottom(path: Path, frac: float) -> None:
@@ -293,6 +338,7 @@ def fill_template(template_id: str, ratio: str, w: int, h: int, *, bg: str, prod
                  if logo else f'<div class="brand">{html.escape(brand_name)}</div>')
     vals = {**{k: (f"{v:.0f}" if isinstance(v, float) else v) for k, v in g.items()},
             "W": w, "H": h, "C1": c1, "C2": c2, "FONT": html.escape(font or "Inter"),
+            "INK": "#FFFFFF" if _lum(c1) < 0.45 else "#111318",  # text on a brand-colour panel
             "BASE_CSS": (TEMPLATES / "_base.css").read_text(encoding="utf-8"),
             "BG": Path(bg).as_uri(), "PRODUCT": Path(product).as_uri() if product else "",
             "PROD_CLASS": g["PROD_CLASS"] + ("" if product else " hide"),

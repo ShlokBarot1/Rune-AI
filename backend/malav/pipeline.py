@@ -20,7 +20,7 @@ STEPS = [
     Step("intake", intake.graph, ("brief", "context_doc")),  # a subgraph: one node per question
     Step("research", research.research_step, ("research", "context_doc")),
     Step("strategy", strategy.strategy_step, ("blueprint",)),
-    Step("hooks", hooks.hooks_step, ("hooks",)),
+    Step("hooks", hooks.hooks_step, ("hooks", "directions")),
     Step("creatives", creatives.creatives_step, ("package",)),
 ]
 
