@@ -83,6 +83,11 @@ def check() -> None:
     pid = os.environ["META_PAGE_ID"]
     print(f"page ok: {pages[pid]}" if pid in pages else
           f"page {pid}: not listed in promote_pages (fine for sandbox if creatives still build)")
+    try:  # competitor research (malav.research) reads the Ad Library, with META_AD_LIBRARY_TOKEN when set
+        from malav.web import ad_library
+        print(f"ad library ok: {len(ad_library('coffee', ['FR'], 3))} sample ads")
+    except Exception as e:
+        print(f"ad library: {str(e)[:200]} (needs META_AD_LIBRARY_TOKEN from your own ID-confirmed Facebook account)")
 
 
 def upload_video(path: str, wait_s: int = 300) -> str:

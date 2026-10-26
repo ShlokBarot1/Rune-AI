@@ -72,7 +72,7 @@ export default function ApprovalDock({ item, clientId, onDone, prefill }: {
         <div className="mt-3 flex flex-col gap-2 pl-12">
           <div className="flex flex-wrap gap-2">
             {item.options?.map((o: string, i: number) => (
-              <button key={o} disabled={busy} className={`btn ${i === 0 ? "btn-lime" : "btn-ghost"} !h-9`} onClick={() => send({ answer: o })}>{o}</button>
+              <button key={o} disabled={busy} className={`btn ${i === 0 ? "btn-lime" : "btn-ghost"} !h-auto min-h-9 !rounded-2xl py-2 !whitespace-normal text-left`} onClick={() => send({ answer: o })}>{o}</button>
             ))}
           </div>
           <DateRange suggested={item.options?.[0]} busy={busy} onSend={(a) => send({ answer: a })} />

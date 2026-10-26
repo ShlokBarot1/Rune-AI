@@ -7,7 +7,6 @@ or a 429 never sinks the others. The step also adds a research section to the co
 from __future__ import annotations
 
 import json
-import os
 import re
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -174,13 +173,17 @@ def competitors(ctx: Ctx) -> dict:
 
     # each competitor: Meta Ad Library, else their website, else a web search; one source failing isn't the end
     material = []
-    use_ads = bool(os.getenv("META_ACCESS_TOKEN"))
+    use_ads = bool(web.ad_library_token())
     for c in names:
         if use_ads:
             try:
                 ads = web.ad_library(c.name, EU)
-                bodies = [" / ".join(a.get("ad_creative_bodies") or []) for a in ads][:6]
-                material.append(f"## {c.name} — {len(ads)} ads in Meta Ad Library\n" + "\n".join(f"- {x[:300]}" for x in bodies))
+                # longest-running first: an ad still live after weeks is usually one that pays for itself
+                ads.sort(key=lambda a: a.get("ad_delivery_start_time") or "9999")
+                bodies = [f"(running since {(a.get('ad_delivery_start_time') or '?')[:10]}) "
+                          + " / ".join(a.get("ad_creative_bodies") or []) for a in ads][:6]
+                material.append(f"## {c.name} — {len(ads)} ads in Meta Ad Library, longest-running first\n"
+                                + "\n".join(f"- {x[:300]}" for x in bodies))
                 bus.log(ctx.cid, agent, f"Pulled {len(ads)} {c.name} ads from the Meta Ad Library")
                 continue
             except Exception as e:

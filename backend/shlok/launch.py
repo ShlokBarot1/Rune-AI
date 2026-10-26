@@ -47,6 +47,21 @@ def _forget(client_id: str, local_ref: str):
         con.execute("delete from meta_objects where client_id=? and local_ref=?", (client_id, local_ref))
 
 
+def remove(client_id: str) -> int:
+    """Delete a client's real Meta campaigns (Meta takes their ad sets and ads with them) and forget every
+    object. Returns how many campaigns were deleted; raises if Meta refuses, so nothing is half-forgotten."""
+    camps = [o for o in existing(client_id).values() if o.kind == "campaign" and not o.meta_id.startswith("dry_")]
+    for o in camps:
+        try:
+            meta.api("DELETE", o.meta_id)
+        except meta.MetaError as e:
+            if "does not exist" not in str(e):  # already deleted in Ads Manager is fine
+                raise
+    with _db() as con:
+        con.execute("delete from meta_objects where client_id=?", (client_id,))
+    return len(camps)
+
+
 def _iso(d, end=False) -> str:
     return datetime.combine(d, time(23, 59) if end else time(0, 0), tzinfo=timezone.utc).isoformat()
 

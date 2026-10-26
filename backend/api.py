@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import sqlite3
 import threading
 from pathlib import Path
@@ -26,7 +27,7 @@ from core.schemas import new_id, now
 import agency
 from graph import build
 from malav import api as malav_api
-from shlok import api as shlok_api
+from shlok import api as shlok_api, launch
 
 app = FastAPI(title="Rune AI")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -155,6 +156,28 @@ def continue_run(cid: str):
         raise HTTPException(409, "Nothing to continue: the run is going, waiting for you, or finished")
     start(cid, None)
     return {"ok": True}
+
+
+@app.post("/runs/{cid}/delete")
+def delete_run(cid: str):
+    """Remove a campaign for good: its Meta campaign (when one was really created), checkpoints, logs, results, media."""
+    if not known(cid):
+        raise HTTPException(404, "No such campaign")
+    if cid in _running:
+        raise HTTPException(409, "Stop the run before removing it")
+    try:
+        meta_campaigns = launch.remove(cid)
+    except Exception as e:
+        raise HTTPException(502, f"Meta wouldn't delete the campaign, so nothing was removed: {e}")
+    graph.checkpointer.delete_thread(cid)
+    with _runs_db() as con:
+        for table in ("runs", "agent_messages", "insights", "optimizer_actions"):
+            try:
+                con.execute(f"delete from {table} where client_id=?", (cid,))
+            except sqlite3.OperationalError:  # table not created yet (never launched / never optimised)
+                pass
+    shutil.rmtree(Path("media") / cid, ignore_errors=True)
+    return {"deleted": cid, "meta_campaigns": meta_campaigns}
 
 
 @app.get("/approvals")

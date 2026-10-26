@@ -42,3 +42,7 @@ def test_api_flow(tmp_path, monkeypatch):
     todo = [a for a in perf["actions"] if a["risk"] == "approval" and a["status"] == "proposed"]
     if todo:
         assert c.post(f"/runs/{cid}/actions/{todo[0]['id']}", json={"approve": True}).status_code == 200
+
+    assert c.post(f"/runs/{cid}/delete").json() == {"deleted": cid, "meta_campaigns": 0}  # dry run: nothing in Meta
+    assert c.get(f"/runs/{cid}").status_code == 404 and cid not in [r["client_id"] for r in c.get("/runs").json()]
+    assert c.post("/runs", json={"client_id": cid}).status_code == 200  # the id is free again

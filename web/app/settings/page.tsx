@@ -10,7 +10,7 @@ const ROLES = [["strategist", "Strategist · runs campaigns"], ["client", "Clien
 export default function Settings() {
   const [brand, setBrand] = useState<Json>({ agency_name: "", color: "#D4F34A", logo: null });
   const [users, , reload] = usePoll<Json[]>("/auth/users", 20000);
-  const [runs] = usePoll<Json[]>("/runs", 20000);
+  const [runs, , reloadRuns] = usePoll<Json[]>("/runs", 20000);
   const [msg, setMsg] = useState<string | null>(null);
   const label = (r: Json) => (runs ?? []).filter((x) => x.name === r.name).length > 1 ? `${r.name} · ${r.client_id.slice(-4)}` : r.name;
   const [nu, setNu] = useState<Json>({ email: "", name: "", role: "client", password: "", clients: [] });
@@ -27,6 +27,13 @@ export default function Settings() {
   const access = async (u: Json, cid: string) => {
     const clients = u.clients.includes(cid) ? u.clients.filter((c: string) => c !== cid) : [...u.clients, cid];
     await post(`/auth/users/${u.id}`, { clients }); reload();
+  };
+  const removeRun = async (r: Json) => {
+    if (!confirm(`Remove “${label(r)}” for good? Its Meta campaign, creatives, logs and results are deleted.`)) return;
+    try {
+      const out = await post(`/runs/${r.client_id}/delete`, {});
+      setMsg(`Removed ${label(r)}${out.meta_campaigns ? ` and its ${out.meta_campaigns} Meta campaign(s)` : ""}.`); reloadRuns();
+    } catch (e) { setMsg(String((e as Error).message)); }
   };
 
   return (
@@ -82,6 +89,19 @@ export default function Settings() {
             ))}
           </div>
         )}
+      </section>
+
+      <section className="card flex flex-col gap-3">
+        <div className="title">Campaigns</div>
+        <p className="meta">Removing one deletes it in Meta too (when it was really created there), plus its creatives, logs and results. It can't be undone.</p>
+        {(runs ?? []).map((r) => (
+          <div key={r.client_id} className="tile flex flex-wrap items-center gap-2">
+            <span className="font-semibold">{label(r)}</span><span className="meta">{r.client_id}</span>
+            {r.live && <span className="pill">live</span>}{r.running && <span className="pill">running</span>}
+            <button className="circle sm ml-auto" title={r.running ? "Stop the run first" : "Remove campaign"} disabled={r.running}
+              onClick={() => removeRun(r)}><Trash2 size={13} /></button>
+          </div>
+        ))}
       </section>
     </div>
   );
